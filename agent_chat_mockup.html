@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>V1 Agent 本地 Web Chat（设计 Mockup）</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --panel: rgba(255, 255, 255, 0.06);
+        --panel2: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.65);
+        --border: rgba(255, 255, 255, 0.14);
+        --accent: #7c5cff;
+        --good: #2dd4bf;
+        --warn: #fb7185;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          "Courier New", monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+          "Apple Color Emoji", "Segoe UI Emoji";
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--text);
+        background: radial-gradient(1000px 600px at 20% 0%, rgba(124, 92, 255, 0.35), transparent 55%),
+          radial-gradient(800px 500px at 100% 20%, rgba(45, 212, 191, 0.25), transparent 55%),
+          var(--bg);
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 24px auto;
+        padding: 0 18px 40px;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 0 18px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0;
+        letter-spacing: 0.2px;
+      }
+      header .meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 16px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+      }
+      .card .hd {
+        padding: 12px 14px;
+        background: var(--panel2);
+        border-bottom: 1px solid var(--border);
+        font-size: 13px;
+        color: var(--muted);
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .card .bd {
+        padding: 14px;
+      }
+      .chat {
+        height: 520px;
+        display: grid;
+        grid-template-rows: 1fr auto;
+      }
+      .msgs {
+        padding: 14px;
+        overflow: auto;
+      }
+      .bubble {
+        max-width: 86%;
+        margin: 10px 0;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.06);
+        line-height: 1.4;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+      .bubble.user {
+        margin-left: auto;
+        border-color: rgba(124, 92, 255, 0.55);
+        background: rgba(124, 92, 255, 0.12);
+      }
+      .bubble.assistant {
+        margin-right: auto;
+      }
+      .bubble .tag {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .composer {
+        border-top: 1px solid var(--border);
+        padding: 12px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        background: rgba(0, 0, 0, 0.15);
+      }
+      textarea {
+        width: 100%;
+        resize: none;
+        height: 44px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        padding: 10px 12px;
+        outline: none;
+        font-size: 13px;
+      }
+      button {
+        border: 1px solid rgba(124, 92, 255, 0.7);
+        background: rgba(124, 92, 255, 0.18);
+        color: var(--text);
+        padding: 10px 12px;
+        border-radius: 12px;
+        cursor: pointer;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 8px 10px;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+      .kv .k {
+        color: var(--muted);
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.86);
+      }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .pill.good {
+        border-color: rgba(45, 212, 191, 0.6);
+        color: rgba(45, 212, 191, 0.95);
+      }
+      .pill.warn {
+        border-color: rgba(251, 113, 133, 0.6);
+        color: rgba(251, 113, 133, 0.95);
+      }
+      pre {
+        margin: 10px 0 0;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.18);
+        overflow: auto;
+        font-size: 12px;
+        line-height: 1.35;
+        font-family: var(--mono);
+        color: rgba(255, 255, 255, 0.86);
+      }
+      @media (max-width: 980px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <h1>V1 Agent 本地 Web Chat（设计 Mockup）</h1>
+          <div class="meta">用于对齐 UI / 消息流 / 组件边界（不是实现代码）</div>
+        </div>
+        <div class="meta">入口：Browser → Node/TS Agent Server → Tools（SmartThings / ROS2）</div>
+      </header>
+
+      <div class="grid">
+        <section class="card chat">
+          <div class="hd">
+            <div>Chat</div>
+            <div class="pill good">V1</div>
+          </div>
+          <div class="msgs">
+            <div class="bubble user">
+              <div class="tag">User</div>
+              把客厅灯打开，亮度设为 40%，然后告诉我当前 ROS2 的 /robot_state 参数。
+            </div>
+            <div class="bubble assistant">
+              <div class="tag">Assistant</div>
+              我会先执行：SmartThings 打开客厅灯并设置亮度；然后通过 rosbridge 读取 ROS2 参数。执行中…
+            </div>
+            <div class="bubble assistant">
+              <div class="tag">Tool Call</div>
+              <code>smartthings.setSwitch(deviceId=..., on=true)</code>
+              <br />
+              <code>smartthings.setLevel(deviceId=..., level=40)</code>
+            </div>
+            <div class="bubble assistant">
+              <div class="tag">Tool Call</div>
+              <code>ros2.getParam(node="/robot", name="robot_state")</code>
+            </div>
+            <div class="bubble assistant">
+              <div class="tag">Assistant</div>
+              已打开客厅灯并设置亮度 40%。ROS2 参数 <code>/robot_state</code> 当前为：<code>idle</code>。
+            </div>
+          </div>
+          <div class="composer">
+            <textarea placeholder="输入消息（Enter 发送 / Shift+Enter 换行）" disabled></textarea>
+            <button disabled>Send</button>
+          </div>
+        </section>
+
+        <aside class="card">
+          <div class="hd">
+            <div>V1 组件边界</div>
+            <div class="pill">设计</div>
+          </div>
+          <div class="bd">
+            <div class="kv">
+              <div class="k">Channel</div>
+              <div>Local Web（未来：Slack）</div>
+
+              <div class="k">Agent Core</div>
+              <div>LangChain JS Agent（工具调用 + 对话）</div>
+
+              <div class="k">Tools</div>
+              <div>SmartThings（PAT/REST）+ ROS2（rosbridge/ws）</div>
+
+              <div class="k">Policy</div>
+              <div>
+                <span class="pill warn">安全约束</span>
+                关键操作二次确认（可选）
+              </div>
+
+              <div class="k">Config</div>
+              <div><code>.env</code>：Qwen baseURL / model / key；SmartThings PAT；rosbridge ws URL</div>
+            </div>
+
+            <pre>
+消息流（高层）
+Browser UI
+  -> POST /api/chat (or WS message)
+     -> Agent (LLM)
+        -> tool_calls:
+           - smartthings.*
+           - ros2.*
+        -> final response
+  <- streamed tokens / events
+</pre>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </body>
+</html>
+
