@@ -1,0 +1,9 @@
+{
+  "aliases": {
+    "客厅灯": {
+      "deviceId": "replace-with-smartthings-device-id",
+      "room": "客厅",
+      "type": "light"
+    }
+  }
+}

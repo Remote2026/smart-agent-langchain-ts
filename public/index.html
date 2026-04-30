@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Smart Agent</h1>
+          <p>Local Web Chat · LangChain · SmartThings · ROS2</p>
+        </div>
+        <div id="status" class="status">ready</div>
+      </header>
+
+      <section class="layout">
+        <section class="chat-panel" aria-label="Chat">
+          <div id="messages" class="messages">
+            <article class="message assistant">
+              <div class="role">Assistant</div>
+              <div class="content">你好。你可以直接用中文让我控制 SmartThings 设备或读取 ROS2 参数。</div>
+            </article>
+          </div>
+
+          <form id="composer" class="composer">
+            <textarea
+              id="messageInput"
+              rows="1"
+              placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+              autocomplete="off"
+            ></textarea>
+            <button id="sendButton" type="submit">发送</button>
+          </form>
+        </section>
+
+        <aside class="side-panel" aria-label="Runtime">
+          <div class="side-section">
+            <h2>Runtime</h2>
+            <dl>
+              <dt>Channel</dt>
+              <dd>Local Web</dd>
+              <dt>Streaming</dt>
+              <dd>POST /api/chat · SSE</dd>
+              <dt>Tools</dt>
+              <dd>SmartThings REST · rosbridge rosapi</dd>
+            </dl>
+          </div>
+
+          <div class="side-section">
+            <h2>Tool Events</h2>
+            <div id="toolEvents" class="tool-events">
+              <div class="empty">暂无工具调用</div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
