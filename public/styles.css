@@ -154,6 +154,50 @@ h1 {
   background: #15171c;
 }
 
+.attachments {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  background: #15171c;
+}
+
+.attachments .file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: #111318;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attachments .file span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.attachments .prompt {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  padding: 11px 12px;
+  background: #111318;
+  color: var(--text);
+}
+
+.attachments .prompt:focus {
+  border-color: rgba(63, 191, 143, 0.75);
+}
+
 textarea {
   width: 100%;
   min-height: 44px;
@@ -261,6 +305,47 @@ dd {
 
 .empty {
   color: var(--muted);
+}
+
+.graph-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.graph-step {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  background: #15171c;
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 10px;
+}
+
+.graph-step strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.graph-step span {
+  color: var(--muted);
+}
+
+.graph-step .summary {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.graph-step.start {
+  border-color: rgba(63, 191, 143, 0.55);
+}
+
+.graph-step.error {
+  border-color: rgba(226, 93, 93, 0.65);
 }
 
 @media (max-width: 920px) {

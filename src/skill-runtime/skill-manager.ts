@@ -32,10 +32,18 @@ export class SkillManager {
     this.shellEnabled = options.shellEnabled;
   }
 
+  /**
+   * 返回技能摘要列表（不包含 SKILL.md 正文）
+   * - 用于 UI 或系统提示词摘要
+   */
   listSkills(): SkillSummary[] {
     return this.loadSkills().map(({ content: _content, ...summary }) => summary);
   }
 
+  /**
+   * 读取指定技能的完整信息（包含 SKILL.md 正文）
+   * - 由 tool `skill_read` 调用，供模型理解规则/允许命令
+   */
   getSkill(name: string): Skill {
     const skill = this.loadSkills().find((candidate) => candidate.name === name);
     if (!skill) {
@@ -46,6 +54,11 @@ export class SkillManager {
   }
 
   describeForPrompt(): string {
+    /**
+     * 注入到 LLM system prompt 的“技能清单摘要”
+     * - 让模型在对话中知道有哪些 skill_* 工具可用
+     * - 具体执行 shell 仍然要走白名单（runShell）
+     */
     const skills = this.listSkills();
     if (!skills.length) {
       return "No local skills are installed.";
@@ -69,6 +82,14 @@ export class SkillManager {
     stdout: string;
     stderr: string;
   }> {
+    /**
+     * 高风险能力：执行本地 shell 命令
+     *
+     * 安全模型：
+     * - 全局开关：ENABLE_SKILL_SHELL 必须开启
+     * - 技能白名单：命令必须在 SKILL.md 的 Allowed shell commands 中匹配
+     * - 额外拦截：阻止 rm/del/git reset 等潜在破坏性操作（粗粒度防护）
+     */
     if (!this.shellEnabled) {
       throw new Error("Skill shell execution is disabled. Set ENABLE_SKILL_SHELL=true to enable it.");
     }
@@ -104,6 +125,7 @@ export class SkillManager {
   }
 
   private loadSkills(): Skill[] {
+    // 扫描 skillsDir 下每个子目录的 SKILL.md
     if (!fs.existsSync(this.rootDir)) {
       return [];
     }
@@ -150,6 +172,7 @@ function extractDescription(content: string): string {
 }
 
 function extractAllowedShellCommands(content: string): string[] {
+  // 解析 Markdown 中的 "Allowed shell commands" 小节（支持 `- xxx` 列表）
   const lines = content.split(/\r?\n/);
   const commands: string[] = [];
   let inSection = false;
@@ -178,6 +201,7 @@ function extractAllowedShellCommands(content: string): string[] {
 }
 
 function isAllowedCommand(command: string, allowed: string[]): boolean {
+  // 支持精确匹配与前缀匹配（以 * 结尾）
   return allowed.some((entry) => {
     const normalized = entry.trim();
     if (!normalized) {
@@ -193,6 +217,7 @@ function isAllowedCommand(command: string, allowed: string[]): boolean {
 }
 
 function assertSafeCommand(command: string): void {
+  // 粗粒度阻断一些常见破坏性命令（作为白名单之外的第二道防线）
   const blocked = [
     /\brm\b/i,
     /\bdel\b/i,

@@ -1,5 +1,6 @@
 const messagesEl = document.querySelector("#messages");
 const toolEventsEl = document.querySelector("#toolEvents");
+const graphStepsEl = document.querySelector("#graphSteps");
 const formEl = document.querySelector("#composer");
 const inputEl = document.querySelector("#messageInput");
 const sendButtonEl = document.querySelector("#sendButton");
@@ -8,6 +9,17 @@ const statusEl = document.querySelector("#status");
 const sessionId = localStorage.getItem("smart-agent-session") || crypto.randomUUID();
 localStorage.setItem("smart-agent-session", sessionId);
 
+const GRAPH_NODES = [
+  "ingest",
+  "router_intent",
+  "smartthings_node",
+  "ros2_node",
+  "default_node",
+  "respond",
+  "finalize"
+];
+const graphStepState = new Map();
+
 formEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = inputEl.value.trim();
@@ -15,18 +27,22 @@ formEl.addEventListener("submit", async (event) => {
     return;
   }
 
+  // UI -> HTTP 数据流（text-only）
   appendMessage("user", "User", text);
   inputEl.value = "";
   resizeInput();
   setBusy(true);
+  resetGraphSteps();
 
   try {
+    const body = { sessionId, message: { kind: "text", text } };
+
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ sessionId, text })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok || !response.body) {
@@ -55,6 +71,9 @@ async function readEventStream(stream) {
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // SSE -> UI 数据流：
+  // 服务器会不断写入 "event: xxx\\ndata: {...}\\n\\n"
+  // 我们按双换行拆包，取 data 行 JSON.parse 后分发到 handleServerEvent。
   while (true) {
     const { value, done } = await reader.read();
     if (done) {
@@ -83,12 +102,19 @@ function handleServerEvent(event) {
     return;
   }
 
+  if (event.type === "node") {
+    // V2：node 事件用于渲染 Graph Steps（节点进度）
+    applyNodeEvent(event.payload);
+    return;
+  }
+
   if (event.type === "final") {
     appendMessage("assistant", "Assistant", event.payload.text || "(empty response)");
     return;
   }
 
   if (event.type === "tool") {
+    // tool 事件用于渲染 Tool Events（详细日志）
     appendToolEvent(event.payload);
     if (event.payload.status === "executing") {
       appendMessage("tool", "Tool Call", `${event.payload.name}\n${formatJson(event.payload.input)}`);
@@ -154,4 +180,35 @@ function resizeInput() {
 
 function formatJson(value) {
   return JSON.stringify(value, null, 2);
+}
+
+function resetGraphSteps() {
+  if (!graphStepsEl) {
+    return;
+  }
+  graphStepState.clear();
+  graphStepsEl.innerHTML = '<div class="empty">暂无图节点事件</div>';
+}
+
+function applyNodeEvent(payload) {
+  const empty = graphStepsEl?.querySelector(".empty");
+  empty?.remove();
+
+  const node = payload.node || "unknown";
+  graphStepState.set(node, payload);
+
+  const order = GRAPH_NODES.includes(node) ? GRAPH_NODES : [...GRAPH_NODES, ...graphStepState.keys()];
+  const items = Array.from(new Set(order)).filter((n) => graphStepState.has(n));
+
+  graphStepsEl.innerHTML = "";
+  for (const name of items) {
+    const evt = graphStepState.get(name);
+    const row = document.createElement("div");
+    row.className = `graph-step ${evt.phase}`;
+    row.innerHTML = `<strong></strong><span></span><div class="summary"></div>`;
+    row.querySelector("strong").textContent = name;
+    row.querySelector("span").textContent = evt.phase;
+    row.querySelector(".summary").textContent = evt.summary || "";
+    graphStepsEl.append(row);
+  }
 }

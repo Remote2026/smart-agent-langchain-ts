@@ -12,6 +12,14 @@ export function createTools(options: {
   skills?: SkillManager;
 }) {
   const { smartThings, rosbridge, aliases, skills } = options;
+  /**
+   * tools 的定位：
+   * - 这是 LangGraph / LLM 可调用的“外部能力接口”
+   * - SmartThings/ROS2 属于“有副作用工具”，需要在 graph node 中做最小约束（白名单/参数范围）
+   * - skill_run_shell 属于高风险能力，必须同时满足：
+   *   1) ENABLE_SKILL_SHELL=true
+   *   2) 对应技能的 SKILL.md 明确列出 Allowed shell commands
+   */
   const aliasInput = z.object({
     alias: z.string().min(1).describe("Natural-language device name or alias")
   });
@@ -102,6 +110,7 @@ export function createTools(options: {
   ];
 
   if (!skills) {
+    // 未启用本地技能时：只返回 SmartThings/ROS2 工具集
     return tools;
   }
 
@@ -120,6 +129,7 @@ export function createTools(options: {
       func: async (input) => {
         const { skillName } = skillNameInput.parse(input);
         const skill = skills.getSkill(skillName);
+        // 这里返回 SKILL.md 的全文内容给模型，属于“只读能力”
         return JSON.stringify({
           name: skill.name,
           path: skill.path,
@@ -137,6 +147,7 @@ export function createTools(options: {
       schema: skillShellInput,
       func: async (input) => {
         const parsed = skillShellInput.parse(input);
+        // 真正执行命令的逻辑在 SkillManager.runShell 内，那里会做白名单 + 安全校验
         return JSON.stringify(await skills.runShell(parsed));
       }
     })

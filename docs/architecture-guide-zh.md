@@ -8,7 +8,7 @@
 
 - 前端提供浏览器聊天界面。
 - 后端使用 Node.js、TypeScript、Express 提供 API。
-- Agent 使用 LangChain 调用 OpenAI-compatible 模型接口。
+- Agent 使用 LangChain 生态（**LangGraph.js + LangChain 模型与工具**）调用 OpenAI-compatible 模型接口。
 - 当前默认适配 Qwen DashScope OpenAI-compatible endpoint。
 - Agent 可以调用 SmartThings 工具控制设备。
 - Agent 可以通过 rosbridge 调用 ROS2 参数读写能力。
@@ -34,7 +34,7 @@ Express Server
   v
 SmartAgent
   |
-  | LangChain tool calling
+  | LangGraph (ReAct agent graph)
   v
 Tools
   |-- SmartThings REST API
@@ -71,12 +71,15 @@ Tools
 3. `src/index.ts` 创建 SSE 响应流。
 4. `src/index.ts` 调用 `agent.handleUserMessage(...)`。
 5. `SmartAgent` 把用户消息加入当前 session 的消息历史。
-6. Agent 调用 Qwen 模型。
-7. 如果模型返回普通回答，服务端发送 `final` 和 `done` 事件。
-8. 如果模型返回 tool call，Agent 查找对应 LangChain tool 并执行。
-9. 工具结果以 `ToolMessage` 形式加入消息历史。
-10. Agent 再次调用模型，让模型基于工具结果生成最终回答。
-11. 浏览器解析 SSE chunk，并把状态、工具日志、最终回答渲染到页面。
+6. Agent 启动 LangGraph 的 ReAct 图执行（`createReactAgent(...).stream(...)`）。
+7. LangGraph 在图内部按需循环：
+   - `agent` 节点调用模型（可能产生 tool calls）
+   - `tools` 节点执行工具并把结果写回消息历史（`ToolMessage`）
+8. 服务端把 LangGraph 每一步产生的新消息映射成 SSE：
+   - `AIMessage.tool_calls` -> `tool: executing`
+   - `ToolMessage` -> `tool: ok/error`
+9. 图结束后，服务端取最后一条 `AIMessage` 作为本轮最终回答，发送 `final`。
+10. 服务端发送 `status: done`，浏览器完成渲染。
 
 SSE 事件类型：
 
@@ -92,12 +95,15 @@ Agent 的核心逻辑在 `src/agent/agent.ts`。
 工作方式：
 
 1. 每个 `sessionId` 对应一份内存消息历史。
-2. 系统提示词定义 Agent 行为规则。
-3. LangChain 的 `bindTools(...)` 把工具暴露给模型。
-4. 模型可以返回一个或多个 tool calls。
-5. 服务端根据 tool name 找到实际工具并执行。
-6. 工具执行结果写回模型上下文。
-7. 最多循环 8 步，避免无限工具调用。
+2. 系统提示词定义 Agent 行为规则，但**不写入 session**；它通过 LangGraph 的 `prompt` 参数注入到每次模型调用中。
+3. 使用 `createReactAgent({ llm, tools, prompt, version: "v2" })` 创建 ReAct 图：
+   - `agent` 节点：调用模型（OpenAI-style tool calling）
+   - `tools` 节点：按工具名执行 tool，并产出 `ToolMessage`
+   - 边（条件路由）：若模型输出 tool calls 则继续走 `tools`，否则结束
+4. 服务端用 `graph.stream({ messages }, { streamMode: "values", recursionLimit: 8 })` 流式运行：
+   - `streamMode: "values"` 代表每一步输出“完整 state 快照”（包含 `messages`）
+   - `recursionLimit: 8` 用于限制循环次数，避免无限工具调用
+5. 服务端对 `messages` 做增量 diff，把执行过程转成 SSE 事件（`status/tool/final/error`）。
 
 这个项目没有把工具结果直接当最终回答。工具结果会先回到模型，让模型把结果整理成适合用户阅读的语言。
 
