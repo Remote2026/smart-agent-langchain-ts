@@ -3,3 +3,5 @@ dist/
 .env
 npm-debug.log*
 logs/*
+checkpoints.db*
+.claude/settings.local.json

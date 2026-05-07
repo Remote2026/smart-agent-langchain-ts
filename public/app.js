@@ -170,6 +170,9 @@ function setBusy(isBusy) {
   if (isBusy) {
     statusEl.textContent = "sending";
     statusEl.classList.add("busy");
+  } else {
+    // 恢复焦点：disabled 过的元素不会自动获得焦点
+    inputEl.focus();
   }
 }
 
