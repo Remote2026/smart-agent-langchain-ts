@@ -105,7 +105,7 @@ V2 的 GraphState 保持不变（sessionId / input / messages / userText / inten
 | | V2 | V2.1 |
 |---|---|---|
 | 领域节点 | 3 个硬编码节点 | 0 个（统一 agent 循环） |
-| 图节点总数 | 7 | 5 |
+| 图节点总数 | 6 | 6 |
 | LLM 调用方式 | 人工 prompt 做动作分类 | bindTools 标准 tool calling |
 | Tool 调用 | 代码手动 find + invoke | ToolNode 自动执行 |
 | 多步依赖 | 代码硬编码顺序 | LLM 自主多轮决策 |
