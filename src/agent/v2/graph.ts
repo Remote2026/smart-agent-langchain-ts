@@ -161,7 +161,7 @@ async function prepareAgentNode(state: GraphStateType, deps: Deps): Promise<Part
   const events: GraphEvent[] = [];
   addEvent(events, nodeEvent({ node: "prepare_agent", phase: "start", summary: `intent=${state.intent ?? "default"}` }));
 
-  const hasSystem = state.messages.length > 0 && state.messages[0] instanceof SystemMessage;
+  const hasSystem = state.messages.some(m => m instanceof SystemMessage);
   const systemMessages: BaseMessage[] = hasSystem ? [] : [new SystemMessage(deps.systemPrompt)];
 
   const tools = selectTools(state.intent, deps.tools);
