@@ -21,14 +21,14 @@ export const ChatRequestSchema = z.object({
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
 /**
- * V2State：StateGraph 的共享状态（每个 node 读/写它）。
+ * AgentState：StateGraph 的共享状态（每个 node 读/写它）。
  *
  * 关键点：
  * - `graphEvents`：图执行过程中的“可观测性事件”，SSE 只转发增量
  * - `messages`：会话历史（多轮上下文）
  * - `toolResults`：结构化执行结果（respond 统一生成最终自然语言）
  */
-export type V2State = {
+export type AgentState = {
   sessionId: string;
   input: InputMessage;
   messages: BaseMessage[];
