@@ -33,8 +33,6 @@ const GraphState = Annotation.Root({
   }),
   userText: Annotation<string | undefined>({ reducer: (_, n) => n }),
   intent: Annotation<"smartthings" | "ros2" | "default" | undefined>({ reducer: (_, n) => n }),
-  intentConfidence: Annotation<"low" | "medium" | "high" | undefined>({ reducer: (_, n) => n }),
-  intentReason: Annotation<string | undefined>({ reducer: (_, n) => n }),
   toolResults: Annotation<unknown>({ reducer: (_, n) => n }),
   finalText: Annotation<string | undefined>({ reducer: (_, n) => n }),
   graphEvents: Annotation<GraphEvent[]>({ reducer: (_, n) => n, default: () => [] }),
@@ -76,8 +74,6 @@ async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType
     return {
       userText: "",
       intent: "default",
-      intentConfidence: "low",
-      intentReason: "empty text",
       toolResults: undefined,
       finalText: undefined,
       graphEvents: [...state.graphEvents, ...events]
@@ -88,8 +84,6 @@ async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType
   return {
     userText: trimmed,
     intent: undefined,
-    intentConfidence: undefined,
-    intentReason: undefined,
     toolResults: undefined,
     finalText: undefined,
     graphEvents: [...state.graphEvents, ...events]
@@ -108,8 +102,6 @@ async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Parti
     addEvent(events, nodeEvent({ node: "router_intent", phase: "end", summary: "intent=default (missing userText)" }));
     return {
       intent: "default",
-      intentReason: "missing userText",
-      intentConfidence: "low",
       graphEvents: [...state.graphEvents, ...events]
     };
   }
@@ -121,8 +113,6 @@ async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Parti
   });
 
   let intent: "smartthings" | "ros2" | "default" = "default";
-  let intentReason: string;
-  let intentConfidence: "low" | "medium" | "high" = "low";
 
   try {
     const recentHistory = state.messages.slice(-3);
@@ -144,20 +134,16 @@ async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Parti
     const res = await deps.llm.invoke([new HumanMessage(prompt)]);
     const parsed = safeJsonParse(typeof res.content === "string" ? res.content : JSON.stringify(res.content));
     const intentOut = IntentSchema.safeParse(parsed);
-    if (!intentOut.success) {
-      intentReason = "router parse failed";
-    } else {
+    if (intentOut.success) {
       const out = intentOut.data;
-      intentConfidence = out.confidence;
       intent = out.confidence === "low" ? "default" : out.intent;
-      intentReason = `${out.rationale_short} (confidence=${out.confidence})`;
     }
-  } catch (error) {
-    intentReason = error instanceof Error ? error.message : String(error);
+  } catch {
+    // intent stays "default" on error
   }
 
   addEvent(events, nodeEvent({ node: "router_intent", phase: "end", summary: `intent=${intent}` }));
-  return { intent, intentReason, intentConfidence, graphEvents: [...state.graphEvents, ...events] };
+  return { intent, graphEvents: [...state.graphEvents, ...events] };
 }
 
 // ── 节点：prepare_agent ─────────────────────────────────────────────────
