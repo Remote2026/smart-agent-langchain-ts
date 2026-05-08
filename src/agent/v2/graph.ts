@@ -1,4 +1,5 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { AIMessage, HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ChatOpenAI } from "@langchain/openai";
@@ -16,10 +17,6 @@ type Deps = {
 };
 
 // ── 扁平化 GraphState（方案 A）──────────────────────────────────────────
-// 每个字段独立 channel + 独立 reducer，不再嵌套 { state: V2State }。
-// - messages: append reducer（跨轮累积）+ 超过 50 条截断
-// - graphEvents: replace reducer（每轮清空），节点通过 [...prev, ...events] 在本轮内传递
-// - 其余字段: replace reducer（总是用最新值）
 const MAX_HISTORY = 50;
 
 const GraphState = Annotation.Root({
@@ -39,6 +36,7 @@ const GraphState = Annotation.Root({
   toolResults: Annotation<unknown>({ reducer: (_, n) => n }),
   finalText: Annotation<string | undefined>({ reducer: (_, n) => n }),
   graphEvents: Annotation<GraphEvent[]>({ reducer: (_, n) => n, default: () => [] }),
+  agentLoopCount: Annotation<number>({ reducer: (_, n) => n, default: () => 0 }),
 });
 
 type GraphStateType = typeof GraphState.State;
@@ -46,7 +44,19 @@ type GraphStateType = typeof GraphState.State;
 // ── 事件工具 ────────────────────────────────────────────────────────────
 function addEvent(events: GraphEvent[], ev: GraphEvent) {
   events.push(ev);
-  //  console.log("[graph:event]", ev);
+}
+
+// ── 工具选择 ────────────────────────────────────────────────────────────
+
+function selectTools(intent: string | undefined, allTools: StructuredToolInterface[]): StructuredToolInterface[] {
+  switch (intent) {
+    case "smartthings":
+      return allTools.filter(t => t.name.startsWith("smartthings_"));
+    case "ros2":
+      return allTools.filter(t => t.name.startsWith("ros2_"));
+    default:
+      return allTools;
+  }
 }
 
 // ── 节点：ingest ────────────────────────────────────────────────────────
@@ -145,168 +155,124 @@ async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Parti
   return { intent, intentReason, intentConfidence, graphEvents: [...state.graphEvents, ...events] };
 }
 
-// ── 节点：smartthings_node ──────────────────────────────────────────────
+// ── 节点：prepare_agent ─────────────────────────────────────────────────
 
-async function smartthingsNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
+async function prepareAgentNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "smartthings_node", phase: "start", summary: "calling SmartThings tools" }));
+  addEvent(events, nodeEvent({ node: "prepare_agent", phase: "start", summary: `intent=${state.intent ?? "default"}` }));
 
-  const userText = state.userText ?? "";
+  const hasSystem = state.messages.length > 0 && state.messages[0] instanceof SystemMessage;
+  const systemMessages: BaseMessage[] = hasSystem ? [] : [new SystemMessage(deps.systemPrompt)];
 
-  const ActionSchema = z.discriminatedUnion("action", [
-    z.object({ action: z.literal("list_devices") }),
-    z.object({ action: z.literal("set_switch"), alias: z.string().min(1), on: z.boolean() }),
-    z.object({ action: z.literal("none"), reason: z.string().min(1) })
-  ]);
+  const tools = selectTools(state.intent, deps.tools);
+  const names = tools.map(t => t.name).join(", ");
+  addEvent(events, nodeEvent({ node: "prepare_agent", phase: "end", summary: `tools: ${names}` }));
+
+  return {
+    messages: systemMessages,
+    agentLoopCount: 0,
+    graphEvents: [...state.graphEvents, ...events]
+  };
+}
+
+// ── 节点：llm_call ──────────────────────────────────────────────────────
+
+async function llmCallNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
+  const events: GraphEvent[] = [];
+  const loopIdx = state.agentLoopCount;
+  addEvent(events, nodeEvent({ node: "llm_call", phase: "start", source: "llm", summary: `round ${loopIdx + 1}` }));
+
+  const activeTools = selectTools(state.intent, deps.tools);
+  const llmWithTools = deps.llm.bindTools(activeTools);
 
   try {
-    const actionPrompt = `You extract a SmartThings action.\nReturn ONLY valid JSON.\nRules:\n- If user asks for device list, choose action=list_devices.\n- If user asks to turn on/off a device by name, choose action=set_switch with alias and on.\n- Otherwise choose action=none.\n\nSchema:\n${JSON.stringify(
-      { action: "list_devices|set_switch|none", alias: "string (when set_switch)", on: "boolean (when set_switch)", reason: "string (when none)" },
-      null, 2
-    )}\n\nUser text:\n${userText}\n`;
+    const response = await llmWithTools.invoke(state.messages);
+    const hasToolCalls = response instanceof AIMessage && response.tool_calls && response.tool_calls.length > 0;
 
-    const actionRes = await deps.llm.invoke([new HumanMessage(actionPrompt)]);
-    const actionRaw = safeJsonParse(typeof actionRes.content === "string" ? actionRes.content : JSON.stringify(actionRes.content));
-    const action = ActionSchema.safeParse(actionRaw);
+    addEvent(events, nodeEvent({
+      node: "llm_call", phase: "end", source: "llm",
+      summary: hasToolCalls
+        ? `tool_calls: ${response.tool_calls!.map(tc => tc.name).join(", ")}`
+        : `final response len=${typeof response.content === "string" ? response.content.length : 0}`
+    }));
 
-    if (!action.success) {
-      const text = "我没能解析这次 SmartThings 操作，请换一种说法再试。";
-      addEvent(events, nodeEvent({ node: "smartthings_node", phase: "error", summary: "action parse failed", data: actionRaw }));
-      return {
-        toolResults: { ok: false, error: "smartthings action parse failed" },
-        finalText: text,
-        graphEvents: [...state.graphEvents, ...events]
-      };
-    }
-
-    if (action.data.action === "none") {
-      const text = action.data.reason;
-      addEvent(events, nodeEvent({ node: "smartthings_node", phase: "end", summary: "no-op" }));
-      return {
-        toolResults: { ok: true, note: action.data.reason },
-        finalText: text,
-        graphEvents: [...state.graphEvents, ...events]
-      };
-    }
-
-    if (action.data.action === "list_devices") {
-      const listTool = deps.tools.find((t) => t.name === "smartthings_list_devices");
-      if (!listTool) throw new Error("smartthings_list_devices tool is not registered.");
-
-      const tev = toolEvent({ name: "smartthings_list_devices", phase: "start", summary: "GET /v1/devices", data: {} });
-      addEvent(events, tev);
-
-      const raw = await listTool.invoke({});
-      const output = typeof raw === "string" ? safeJsonParse(raw) : raw;
-
-      const tev2 = toolEvent({ name: "smartthings_list_devices", phase: "end", summary: "ok", data: output });
-      addEvent(events, tev2);
-
-      addEvent(events, nodeEvent({ node: "smartthings_node", phase: "end", summary: "ok" }));
-      return {
-        toolResults: output,
-        finalText: formatSmartThingsList(output),
-        graphEvents: [...state.graphEvents, ...events]
-      };
-    }
-
-    // action=set_switch
-    const resolveTool = deps.tools.find((t) => t.name === "smartthings_resolve_alias");
-    const setSwitchTool = deps.tools.find((t) => t.name === "smartthings_set_switch");
-    if (!resolveTool || !setSwitchTool) throw new Error("smartthings_resolve_alias/smartthings_set_switch not registered.");
-
-    const tev3 = toolEvent({ name: "smartthings_resolve_alias", phase: "start", summary: "resolve alias", data: { alias: action.data.alias } });
-    addEvent(events, tev3);
-
-    const resolvedRaw = await resolveTool.invoke({ alias: action.data.alias });
-    const resolved = typeof resolvedRaw === "string" ? safeJsonParse(resolvedRaw) : resolvedRaw;
-
-    const tev4 = toolEvent({ name: "smartthings_resolve_alias", phase: "end", summary: "ok", data: resolved });
-    addEvent(events, tev4);
-
-    const found = typeof resolved === "object" && resolved && (resolved as any).found === true;
-    const deviceId = found ? String((resolved as any).deviceId ?? "") : "";
-    if (!deviceId) {
-      const text = `没有找到名为「${action.data.alias}」的 SmartThings 设备，请换个设备名或先查看设备列表。`;
-      addEvent(events, nodeEvent({ node: "smartthings_node", phase: "end", summary: "alias not found", data: resolved }));
-      return {
-        toolResults: { ok: false, error: "alias not found", resolved },
-        finalText: text,
-        graphEvents: [...state.graphEvents, ...events]
-      };
-    }
-
-    const tev5 = toolEvent({ name: "smartthings_set_switch", phase: "start", summary: action.data.on ? "turn on" : "turn off", data: { deviceId, on: action.data.on } });
-    addEvent(events, tev5);
-
-    const setRaw = await setSwitchTool.invoke({ deviceId, on: action.data.on });
-    const setOut = typeof setRaw === "string" ? safeJsonParse(setRaw) : setRaw;
-
-    const tev6 = toolEvent({ name: "smartthings_set_switch", phase: "end", summary: "ok", data: setOut });
-    addEvent(events, tev6);
-
-    addEvent(events, nodeEvent({ node: "smartthings_node", phase: "end", summary: "ok" }));
     return {
-      toolResults: { ok: true, action: "set_switch", alias: action.data.alias, on: action.data.on, deviceId },
-      finalText: action.data.on ? `已打开 ${action.data.alias}` : `已关闭 ${action.data.alias}`,
+      messages: [response],
+      agentLoopCount: state.agentLoopCount + 1,
       graphEvents: [...state.graphEvents, ...events]
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    addEvent(events, toolEvent({ name: "smartthings_list_devices", phase: "error", summary: message }));
-    addEvent(events, nodeEvent({ node: "smartthings_node", phase: "error", summary: message }));
+    const msg = error instanceof Error ? error.message : String(error);
+    addEvent(events, nodeEvent({ node: "llm_call", phase: "error", source: "llm", summary: msg }));
     return {
-      toolResults: { ok: false, error: message },
-      finalText: `SmartThings 操作失败：${message}`,
+      messages: [new AIMessage(`LLM 调用失败：${msg}`)],
       graphEvents: [...state.graphEvents, ...events]
     };
   }
 }
 
-// ── 节点：ros2_node ─────────────────────────────────────────────────────
+// ── 节点：tool_node（ToolNode 封装）─────────────────────────────────────
 
-async function ros2Node(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
-  return {};
-}
+function buildToolNodeWithEvents(deps: Deps) {
+  const toolNode = new ToolNode(deps.tools);
 
-// ── 节点：default_node ──────────────────────────────────────────────────
+  return async (state: GraphStateType): Promise<Partial<GraphStateType>> => {
+    const events: GraphEvent[] = [];
+    addEvent(events, nodeEvent({ node: "tool_node", phase: "start", summary: "executing tool calls" }));
 
-async function defaultNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
-  const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "default_node", phase: "start", summary: "generating fallback response" }));
+    const lastMsg = state.messages[state.messages.length - 1];
+    if (lastMsg instanceof AIMessage && lastMsg.tool_calls) {
+      for (const tc of lastMsg.tool_calls) {
+        addEvent(events, toolEvent({ name: tc.name, phase: "start", summary: tc.name, data: tc.args }));
+      }
+    }
 
-  try {
-    const res = await deps.llm.invoke([
-      new SystemMessage(deps.systemPrompt),
-      ...state.messages
-    ]);
-    const text = (typeof res.content === "string" ? res.content : JSON.stringify(res.content)).trim();
-    addEvent(events, nodeEvent({ node: "default_node", phase: "end", summary: "ok" }));
-    return { finalText: text, graphEvents: [...state.graphEvents, ...events] };
-  } catch (error) {
-    addEvent(events, nodeEvent({ node: "default_node", phase: "error", summary: error instanceof Error ? error.message : String(error) }));
-    return { finalText: "", graphEvents: [...state.graphEvents, ...events] };
-  }
+    try {
+      const result = await toolNode.invoke({ messages: state.messages });
+      const toolMessages = result.messages as BaseMessage[];
+
+      for (const tm of toolMessages) {
+        const name = (tm as any).name ?? "unknown";
+        addEvent(events, toolEvent({
+          name, phase: "end", summary: "ok",
+          data: typeof tm.content === "string" ? tm.content.slice(0, 500) : tm.content
+        }));
+      }
+
+      const prevResults = Array.isArray(state.toolResults) ? state.toolResults as any[] : [];
+      return {
+        messages: toolMessages,
+        toolResults: [...prevResults, ...toolMessages.map(m => ({ name: (m as any).name, content: m.content }))],
+        graphEvents: [...state.graphEvents, ...events]
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      addEvent(events, toolEvent({ name: "tool_node", phase: "error", summary: msg }));
+      addEvent(events, nodeEvent({ node: "tool_node", phase: "error", summary: msg }));
+      return { graphEvents: [...state.graphEvents, ...events] };
+    }
+  };
 }
 
 // ── 节点：respond ───────────────────────────────────────────────────────
 
 async function respondNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "respond", phase: "start", summary: "generating finalText" }));
+  addEvent(events, nodeEvent({ node: "respond", phase: "start", summary: "extracting final response" }));
 
-  try {
-    // 上游节点已经完成领域操作并给出可展示文本时，respond 只负责落消息。
-    if (state.finalText) {
-      addEvent(events, nodeEvent({ node: "respond", phase: "end", summary: "ok (upstream finalText)" }));
-      return { messages: [new AIMessage(state.finalText)], graphEvents: [...state.graphEvents, ...events] };
-    }
+  const lastAi = [...state.messages].reverse().find(
+    m => m instanceof AIMessage && !(m.tool_calls && m.tool_calls.length > 0)
+  ) as AIMessage | undefined;
 
-    addEvent(events, nodeEvent({ node: "respond", phase: "end", summary: "no finalText" }));
-    return { graphEvents: [...state.graphEvents, ...events] };
-  } catch (error) {
-    return { finalText: "", graphEvents: [...state.graphEvents, ...events] };
+  const text = lastAi && typeof lastAi.content === "string" ? lastAi.content.trim() : (state.finalText ?? "");
+
+  if (text) {
+    addEvent(events, nodeEvent({ node: "respond", phase: "end", summary: `ok len=${text.length}` }));
+    return { finalText: text, graphEvents: [...state.graphEvents, ...events] };
   }
+
+  addEvent(events, nodeEvent({ node: "respond", phase: "end", summary: "no response content" }));
+  return { finalText: "", graphEvents: [...state.graphEvents, ...events] };
 }
 
 // ── 工具函数 ────────────────────────────────────────────────────────────
@@ -315,47 +281,36 @@ function safeJsonParse(text: string): unknown {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-function formatSmartThingsList(output: unknown): string {
-  const devices = typeof output === "object" && output ? (output as any).devices : undefined;
-  if (!Array.isArray(devices)) {
-    return `SmartThings 返回结果：${JSON.stringify(output)}`;
-  }
-
-  if (devices.length === 0) {
-    return "SmartThings 设备列表为空。";
-  }
-
-  return "SmartThings 设备列表：\n" +
-    devices
-      .map((d: any, idx: number) => `${idx + 1}. ${d.label ?? d.name ?? "(unnamed)"} (${d.id ?? "unknown-id"})`)
-      .join("\n");
-}
-
 // ── 构建图 ──────────────────────────────────────────────────────────────
 
 export function buildV2Graph(deps: Deps) {
   const graph = new StateGraph(GraphState)
     .addNode("ingest", ingestNode)
     .addNode("router_intent", (s: GraphStateType) => routeIntentNode(s, deps))
-    .addNode("smartthings_node", (s: GraphStateType) => smartthingsNode(s, deps))
-    .addNode("ros2_node", (s: GraphStateType) => ros2Node(s, deps))
-    .addNode("default_node", (s: GraphStateType) => defaultNode(s, deps))
+    .addNode("prepare_agent", (s: GraphStateType) => prepareAgentNode(s, deps))
+    .addNode("llm_call", (s: GraphStateType) => llmCallNode(s, deps))
+    .addNode("tool_node", buildToolNodeWithEvents(deps))
     .addNode("respond", respondNode);
 
   graph.addEdge(START, "ingest");
   graph.addEdge("ingest", "router_intent");
+  graph.addEdge("router_intent", "prepare_agent");
+  graph.addEdge("prepare_agent", "llm_call");
 
-  graph.addConditionalEdges("router_intent", (s: GraphStateType) => {
-    switch (s.intent) {
-      case "smartthings": return "smartthings_node";
-      case "ros2": return "ros2_node";
-      default: return "default_node";
+  graph.addConditionalEdges("llm_call", (s: GraphStateType) => {
+    const lastMsg = s.messages[s.messages.length - 1];
+    if (lastMsg instanceof AIMessage && lastMsg.tool_calls?.length) {
+      return "tool_node";
     }
+    return "respond";
   });
 
-  graph.addEdge("smartthings_node", "respond");
-  graph.addEdge("ros2_node", "respond");
-  graph.addEdge("default_node", "respond");
+  graph.addConditionalEdges("tool_node", (s: GraphStateType) => {
+    if (s.agentLoopCount < 5) {
+      return "llm_call";
+    }
+    return "respond";
+  });
 
   graph.addEdge("respond", END);
 
