@@ -44,6 +44,7 @@ type GraphStateType = typeof GraphState.State;
 // ── 事件工具 ────────────────────────────────────────────────────────────
 function addEvent(events: GraphEvent[], ev: GraphEvent) {
   events.push(ev);
+  console.log(ev);
 }
 
 // ── 工具选择 ────────────────────────────────────────────────────────────

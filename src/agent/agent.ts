@@ -115,10 +115,9 @@ export class SmartAgent {
         lastStateMessages = Array.isArray(v2State.messages) ? (v2State.messages as BaseMessage[]) : lastStateMessages;
         lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
 
-        console.log(`[agent] handleUserMessage -state`, {
-          messages: Array.isArray(lastStateMessages) ? lastStateMessages.length : undefined,
-          finalTextLen: typeof lastFinalText === "string" ? lastFinalText.length : undefined,
-          graphEvents: v2State.graphEvents.length
+        console.log(`[agent] handleUserMessage - graph state`, {
+          lastStateMessages,
+          lastFinalText
         });
 
         // delta 切片：只取本轮新增的 graphEvents
