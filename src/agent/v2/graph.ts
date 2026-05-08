@@ -16,7 +16,9 @@ type Deps = {
   checkpointer: BaseCheckpointSaver;
 };
 
-// ── 扁平化 GraphState（方案 A）──────────────────────────────────────────
+// ── 扁平化 GraphState ──────────────────────────────────────────────────
+// 数据流: ingest → router_intent → prepare_agent → llm_call ⇄ tool_node → respond
+// llm_call 与 tool_node 之间构成 agent 循环（最多 5 轮），LLM 自主决定调用哪些 tool
 const MAX_HISTORY = 50;
 
 const GraphState = Annotation.Root({
@@ -47,6 +49,7 @@ function addEvent(events: GraphEvent[], ev: GraphEvent) {
 }
 
 // ── 工具选择 ────────────────────────────────────────────────────────────
+// 按意图隔离 tool 子集，避免 smartthings 请求误调到 ros2 tool（安全 + 省 token）
 
 function selectTools(intent: string | undefined, allTools: StructuredToolInterface[]): StructuredToolInterface[] {
   switch (intent) {
@@ -60,6 +63,7 @@ function selectTools(intent: string | undefined, allTools: StructuredToolInterfa
 }
 
 // ── 节点：ingest ────────────────────────────────────────────────────────
+// 校验输入文本，产出 userText。空文本直接短路到 default，跳过 router
 
 async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
@@ -93,6 +97,7 @@ async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType
 }
 
 // ── 节点：router_intent ─────────────────────────────────────────────────
+// 用最近 3 条历史 + 当前 userText 让 LLM 分类意图。低置信度自动降级到 default
 
 async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
@@ -156,11 +161,13 @@ async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Parti
 }
 
 // ── 节点：prepare_agent ─────────────────────────────────────────────────
+// 注入 system prompt + 重置循环计数器。SystemMessage 只写一次（checkpoint 持久化后跨轮复用）
 
 async function prepareAgentNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
   addEvent(events, nodeEvent({ node: "prepare_agent", phase: "start", summary: `intent=${state.intent ?? "default"}` }));
 
+  // 跨轮去重：checkpoint 恢复的 messages 可能已含 SystemMessage
   const hasSystem = state.messages.some(m => m instanceof SystemMessage);
   const systemMessages: BaseMessage[] = hasSystem ? [] : [new SystemMessage(deps.systemPrompt)];
 
@@ -176,6 +183,8 @@ async function prepareAgentNode(state: GraphStateType, deps: Deps): Promise<Part
 }
 
 // ── 节点：llm_call ──────────────────────────────────────────────────────
+// 核心节点：LLM bindTools 后根据 messages 决定是调 tool（返回 tool_calls）还是给最终回复
+// agentLoopCount 递增，用于 tool_node 侧判断是否达到循环上限
 
 async function llmCallNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
@@ -212,6 +221,8 @@ async function llmCallNode(state: GraphStateType, deps: Deps): Promise<Partial<G
 }
 
 // ── 节点：tool_node（ToolNode 封装）─────────────────────────────────────
+// 包装 LangGraph ToolNode，注入 tool:start / tool:end 事件。
+// ToolNode 自动读取最后一条 AIMessage.tool_calls 并执行，返回 ToolMessage[]
 
 function buildToolNodeWithEvents(deps: Deps) {
   const toolNode = new ToolNode(deps.tools);
@@ -255,6 +266,8 @@ function buildToolNodeWithEvents(deps: Deps) {
 }
 
 // ── 节点：respond ───────────────────────────────────────────────────────
+// 从 messages 中逆序找最后一条不含 tool_calls 的 AIMessage 作为 finalText。
+// 逆序是因为 agent 循环结束时，最终 AIMessage 在所有 ToolMessage 之前
 
 async function respondNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
@@ -297,6 +310,7 @@ export function buildV2Graph(deps: Deps) {
   graph.addEdge("router_intent", "prepare_agent");
   graph.addEdge("prepare_agent", "llm_call");
 
+  // llm_call 之后：有 tool_calls → 执行 tool；无 → 直接回复
   graph.addConditionalEdges("llm_call", (s: GraphStateType) => {
     const lastMsg = s.messages[s.messages.length - 1];
     if (lastMsg instanceof AIMessage && lastMsg.tool_calls?.length) {
@@ -305,6 +319,7 @@ export function buildV2Graph(deps: Deps) {
     return "respond";
   });
 
+  // tool_node 之后：未达上限 → 继续 agent 循环；已达上限 → 强制退出
   graph.addConditionalEdges("tool_node", (s: GraphStateType) => {
     if (s.agentLoopCount < 5) {
       return "llm_call";
