@@ -117,8 +117,7 @@ function mapNodeToOrigin(node: string): { file: string; fn: string } | undefined
     smartthings_node: "smartthingsNode",
     ros2_node: "ros2Node",
     default_node: "defaultNode",
-    respond: "respondNode",
-    finalize: "finalizeNode"
+    respond: "respondNode"
   };
   const fn = table[node];
   return fn ? { file, fn } : undefined;
@@ -131,9 +130,6 @@ function mapToolToOrigin(name: string): { file: string; fn: string } | undefined
   }
   if (name.startsWith("ros2_")) {
     return { file: "src/tools/index.ts", fn: "createTools" };
-  }
-  if (name.startsWith("skill_")) {
-    return { file: "src/skill-runtime/skill-manager.ts", fn: "SkillManager" };
   }
   if (name.startsWith("llm.")) {
     return { file: "src/agent/v2/graph.ts", fn: "llm.invoke" };

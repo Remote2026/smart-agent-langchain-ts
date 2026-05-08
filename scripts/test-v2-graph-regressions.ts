@@ -24,6 +24,19 @@ const fakeLlm = {
   }
 };
 
+const defaultLlm = {
+  async invoke(messages: unknown[]): Promise<PromptResponse> {
+    const last = Array.isArray(messages) ? messages[messages.length - 1] : undefined;
+    const content = typeof (last as any)?.content === "string" ? (last as any).content : "";
+
+    if (content.includes("Classify the user's request")) {
+      return { content: JSON.stringify({ intent: "default", confidence: "high", rationale_short: "plain chat" }) };
+    }
+
+    return { content: "default node response" };
+  }
+};
+
 let listDeviceCalls = 0;
 const listDevicesTool = {
   name: "smartthings_list_devices",
@@ -56,7 +69,10 @@ async function runTurn(graph: ReturnType<typeof buildV2Graph>, text: string) {
     chunks.push(chunk);
   }
 
-  return chunks[chunks.length - 1];
+  return {
+    chunks,
+    final: chunks[chunks.length - 1]
+  };
 }
 
 const graph = buildV2Graph({
@@ -66,7 +82,8 @@ const graph = buildV2Graph({
   checkpointer: new MemorySaver()
 });
 
-const first = await runTurn(graph, "list smartthings devices");
+const firstTurn = await runTurn(graph, "list smartthings devices");
+const first = firstTurn.final;
 assert.deepEqual(
   first.graphEvents.map((event: any) => event.node ?? event.name),
   [
@@ -79,14 +96,23 @@ assert.deepEqual(
     "smartthings_list_devices",
     "smartthings_node",
     "respond",
-    "respond",
-    "finalize",
-    "finalize"
+    "respond"
   ],
   "graphEvents should accumulate events from every node in the current turn"
 );
 
-const second = await runTurn(graph, "list smartthings devices again");
+const afterSmartThingsBeforeRespond = firstTurn.chunks.find((chunk: any) => {
+  const names = chunk.graphEvents?.map((event: any) => event.node ?? event.name) ?? [];
+  return names.includes("smartthings_node") && !names.includes("respond");
+});
+assert.equal(
+  afterSmartThingsBeforeRespond?.finalText?.includes("Lamp"),
+  true,
+  "smartthings_node should prepare finalText before respond runs"
+);
+
+const secondTurn = await runTurn(graph, "list smartthings devices again");
+const second = secondTurn.final;
 assert.equal(second.graphEvents[0]?.node, "ingest", "second turn graphEvents should start from the current turn");
 assert.equal(
   second.graphEvents.filter((event: any) => event.node === "ingest").length,
@@ -96,5 +122,27 @@ assert.equal(
 assert.equal(second.toolResults?.ok, false, "tool failure should replace previous successful toolResults");
 assert.equal(second.toolResults?.error, "simulated SmartThings outage");
 assert.equal(second.finalText.includes("Lamp"), false, "failed second turn should not reuse first turn device list");
+
+const defaultGraph = buildV2Graph({
+  llm: defaultLlm as any,
+  tools: [],
+  systemPrompt: "test system prompt",
+  checkpointer: new MemorySaver()
+});
+const defaultTurn = await runTurn(defaultGraph, "hello there");
+const afterDefaultBeforeRespond = defaultTurn.chunks.find((chunk: any) => {
+  const names = chunk.graphEvents?.map((event: any) => event.node ?? event.name) ?? [];
+  return names.includes("default_node") && !names.includes("respond");
+});
+assert.equal(
+  afterDefaultBeforeRespond?.finalText,
+  "default node response",
+  "default_node should call the LLM and prepare finalText before respond runs"
+);
+assert.equal(
+  defaultTurn.final.messages.at(-1)?.content,
+  "default node response",
+  "respond should append default_node finalText as an AIMessage"
+);
 
 console.log("[test-v2-graph-regressions] ok");

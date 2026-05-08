@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SmartAgent } from "./agent/agent.js";
 import { loadAppConfig } from "./config.js";
-import { SkillManager } from "./skill-runtime/skill-manager.js";
 import { createTools } from "./tools/index.js";
 import { RosbridgeClient } from "./tools/ros2.js";
 import { SmartThingsClient } from "./tools/smartthings.js";
@@ -17,35 +16,20 @@ const __dirname = path.dirname(__filename);
 
 const appConfig = loadAppConfig();
 /**
- * SkillManager（本地技能管理器）
- *
- * 作用：
- * 1) 从 `SKILLS_DIR` 目录扫描每个技能的 `SKILL.md`
- * 2) 把技能摘要注入到系统提示词（让模型“知道”有哪些本地能力）
- * 3) 通过 createTools() 注册 `skill_list/skill_read/skill_run_shell` 这类工具
- *
  * 数据流（简化）：
- * HTTP /api/chat -> SmartAgent -> (LangGraph StateGraph) -> tools(skill_* / smartthings_* / ros2_*) -> SSE -> Web UI
+ * HTTP /api/chat -> SmartAgent -> (LangGraph StateGraph) -> tools(smartthings_* / ros2_*) -> SSE -> Web UI
  */
-const skillManager = new SkillManager({
-  skillsDir: appConfig.env.SKILLS_DIR,
-  workspaceDir: process.cwd(),
-  shellEnabled: appConfig.env.ENABLE_SKILL_SHELL
-});
 const tools = createTools({
   smartThings: new SmartThingsClient(appConfig.env.SMARTTHINGS_PAT),
   rosbridge: new RosbridgeClient(appConfig.env.ROSBRIDGE_URL),
-  aliases: appConfig.aliases,
-  // skills 传入后，createTools 会额外注册 `skill_list/skill_read/skill_run_shell`
-  skills: skillManager
+  aliases: appConfig.aliases
 });
 
 const agent = new SmartAgent({
   baseURL: appConfig.env.OPENAI_BASE_URL,
   apiKey: appConfig.env.OPENAI_API_KEY,
   model: appConfig.env.OPENAI_MODEL,
-  tools,
-  skillInstructions: skillManager.describeForPrompt()
+  tools
 });
 
 /**
@@ -161,5 +145,4 @@ app.post("/api/chat", async (request, response) => {
 
 app.listen(appConfig.env.PORT, () => {
   console.log(`Smart Agent web chat is running at http://localhost:${appConfig.env.PORT}`);
-  console.log(`Loaded ${skillManager.listSkills().length} local skill(s) from ${appConfig.env.SKILLS_DIR}`);
 });

@@ -11,11 +11,6 @@ const envSchema = z.object({
   OPENAI_MODEL: z.string().min(1).default("qwen-turbo"),
   SMARTTHINGS_PAT: z.string().min(1).optional(),
   ROSBRIDGE_URL: z.string().url().default("ws://localhost:9090"),
-  SKILLS_DIR: z.string().min(1).default("skills"),
-  ENABLE_SKILL_SHELL: z
-    .string()
-    .optional()
-    .transform((value) => value === "true"),
   PORT: z.coerce.number().int().positive().default(3000)
 });
 

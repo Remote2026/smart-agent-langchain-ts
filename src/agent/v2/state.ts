@@ -38,7 +38,7 @@ export type V2State = {
    */
   userText?: string;
   intent?: "smartthings" | "ros2" | "default";
-  intentRationale?: string;
+  intentReason?: string;
   /**
    * route_intent 的置信度（低置信度会强制兜底到 default）。
    * respond 会基于此做“自然澄清/追问最关键缺失信息”。

@@ -33,7 +33,7 @@ export type GraphEvent =
     summary: string;
     /**
      * 数据来源标记：
-     * - tool：外部工具调用（SmartThings/ROS2/skill_run_shell 等）
+     * - tool：外部工具调用（SmartThings/ROS2 等）
      * - llm：把 LLM 调用当作一种“可观测步骤”记录（不等同于外部工具）
      */
     source?: "tool" | "llm";

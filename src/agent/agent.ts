@@ -11,25 +11,19 @@ type EmitEvent = (event: ChatEventOut) => void;
 
 /**
  * V2：自定义 StateGraph（text-only, Plan A）
- * - ingest -> router_intent -> (smartthings|ros2|default) -> respond -> finalize
+ * - ingest -> router_intent -> (smartthings|ros2|default) -> respond
  * - 每个 node/tool 都产出 graphEvents，SSE 层只做"增量转发"
  */
-function createSystemPrompt(skillInstructions: string): string {
+function createSystemPrompt(): string {
   return `You are a local smart-home and ROS2 assistant.
 You can have normal daily conversation, and you can control SmartThings and ROS2 through tools.
-You can also use local skills when SKILL.md files are installed.
 
 Rules:
 - Use device aliases before controlling named devices.
 - If a device alias is missing or ambiguous, list devices or ask the user to choose.
-- Use skill_list and skill_read to inspect local SKILL.md instructions before applying a skill.
-- Only run shell commands through skill_run_shell when a matching SKILL.md explicitly allows the command.
 - Never invent device IDs, parameter values, or tool results.
 - Keep final answers concise and in the same language as the user.
-- Explain tool failures in readable language without exposing secrets.
-
-Installed local skills:
-${skillInstructions}`;
+- Explain tool failures in readable language without exposing secrets.`;
 }
 
 export class SmartAgent {
@@ -46,7 +40,6 @@ export class SmartAgent {
     apiKey: string;
     model: string;
     tools: StructuredToolInterface[];
-    skillInstructions?: string;
     dbPath?: string;
   }) {
     const model = new ChatOpenAI({
@@ -58,7 +51,7 @@ export class SmartAgent {
       temperature: 0.2
     });
 
-    this.systemPrompt = createSystemPrompt(options.skillInstructions ?? "No local skills are installed.");
+    this.systemPrompt = createSystemPrompt();
     console.log("SmartAgent initialized with system prompt:", this.systemPrompt);
 
     // SqliteSaver：嵌入式 SQLite，数据存本地 .db 文件，无需服务端

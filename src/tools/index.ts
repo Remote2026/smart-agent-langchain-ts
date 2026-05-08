@@ -1,7 +1,6 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { DeviceAliases } from "../config.js";
-import type { SkillManager } from "../skill-runtime/skill-manager.js";
 import { RosbridgeClient } from "./ros2.js";
 import { SmartThingsClient } from "./smartthings.js";
 
@@ -9,16 +8,12 @@ export function createTools(options: {
   smartThings: SmartThingsClient;
   rosbridge: RosbridgeClient;
   aliases: DeviceAliases;
-  skills?: SkillManager;
 }) {
-  const { smartThings, rosbridge, aliases, skills } = options;
+  const { smartThings, rosbridge, aliases } = options;
   /**
    * tools 的定位：
    * - 这是 LangGraph / LLM 可调用的“外部能力接口”
    * - SmartThings/ROS2 属于“有副作用工具”，需要在 graph node 中做最小约束（白名单/参数范围）
-   * - skill_run_shell 属于高风险能力，必须同时满足：
-   *   1) ENABLE_SKILL_SHELL=true
-   *   2) 对应技能的 SKILL.md 明确列出 Allowed shell commands
    */
   const aliasInput = z.object({
     alias: z.string().min(1).describe("Natural-language device name or alias")
@@ -38,15 +33,7 @@ export function createTools(options: {
   const setParamInput = getParamInput.extend({
     value: z.unknown().describe("JSON-serializable parameter value")
   });
-  const skillNameInput = z.object({
-    skillName: z.string().min(1).describe("Skill directory name under the configured skills directory")
-  });
-  const skillShellInput = skillNameInput.extend({
-    command: z.string().min(1).describe("Shell command allowed by the skill's SKILL.md"),
-    timeoutMs: z.number().int().min(1000).max(30000).optional()
-  });
-
-  const tools = [
+  return [
     new DynamicStructuredTool({
       name: "smartthings_resolve_alias",
       description:
@@ -105,50 +92,6 @@ export function createTools(options: {
       func: async (input) => {
         const { node, name, value } = setParamInput.parse(input);
         return JSON.stringify(await rosbridge.setParam(node, name, value));
-      }
-    })
-  ];
-
-  if (!skills) {
-    // 未启用本地技能时：只返回 SmartThings/ROS2 工具集
-    return tools;
-  }
-
-  return [
-    ...tools,
-    new DynamicStructuredTool({
-      name: "skill_list",
-      description: "List installed local skills loaded from SKILL.md files.",
-      schema: z.object({}),
-      func: async () => JSON.stringify(skills.listSkills())
-    }),
-    new DynamicStructuredTool({
-      name: "skill_read",
-      description: "Read the full SKILL.md instructions for a local skill before using it.",
-      schema: skillNameInput,
-      func: async (input) => {
-        const { skillName } = skillNameInput.parse(input);
-        const skill = skills.getSkill(skillName);
-        // 这里返回 SKILL.md 的全文内容给模型，属于“只读能力”
-        return JSON.stringify({
-          name: skill.name,
-          path: skill.path,
-          description: skill.description,
-          shellEnabled: skill.shellEnabled,
-          allowedShellCommands: skill.allowedShellCommands,
-          content: skill.content
-        });
-      }
-    }),
-    new DynamicStructuredTool({
-      name: "skill_run_shell",
-      description:
-        "Run a local shell command only when it is explicitly allowed by the named skill's SKILL.md. Use after reading the relevant skill.",
-      schema: skillShellInput,
-      func: async (input) => {
-        const parsed = skillShellInput.parse(input);
-        // 真正执行命令的逻辑在 SkillManager.runShell 内，那里会做白名单 + 安全校验
-        return JSON.stringify(await skills.runShell(parsed));
       }
     })
   ];
