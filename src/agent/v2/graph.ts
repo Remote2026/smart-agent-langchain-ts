@@ -211,45 +211,42 @@ async function llmCallNode(state: GraphStateType, deps: Deps): Promise<Partial<G
 // 包装 LangGraph ToolNode，注入 tool:start / tool:end 事件。
 // ToolNode 自动读取最后一条 AIMessage.tool_calls 并执行，返回 ToolMessage[]
 
-function buildToolNodeWithEvents(deps: Deps) {
-  const toolNode = new ToolNode(deps.tools);
+async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
+  const events: GraphEvent[] = [];
+  const toolRunner = new ToolNode(deps.tools);
+  addEvent(events, nodeEvent({ node: "tool_node", phase: "start", summary: "executing tool calls" }));
 
-  return async (state: GraphStateType): Promise<Partial<GraphStateType>> => {
-    const events: GraphEvent[] = [];
-    addEvent(events, nodeEvent({ node: "tool_node", phase: "start", summary: "executing tool calls" }));
+  const lastMsg = state.messages[state.messages.length - 1];
+  if (lastMsg instanceof AIMessage && lastMsg.tool_calls) {
+    for (const tc of lastMsg.tool_calls) {
+      addEvent(events, toolEvent({ name: tc.name, phase: "start", summary: tc.name, data: tc.args }));
+    }
+  }
 
-    const lastMsg = state.messages[state.messages.length - 1];
-    if (lastMsg instanceof AIMessage && lastMsg.tool_calls) {
-      for (const tc of lastMsg.tool_calls) {
-        addEvent(events, toolEvent({ name: tc.name, phase: "start", summary: tc.name, data: tc.args }));
-      }
+  try {
+    const result = await toolRunner.invoke({ messages: state.messages });
+    const toolMessages = result.messages as BaseMessage[];
+
+    for (const tm of toolMessages) {
+      const name = (tm as any).name ?? "unknown";
+      addEvent(events, toolEvent({
+        name, phase: "end", summary: "ok",
+        data: typeof tm.content === "string" ? tm.content.slice(0, 500) : tm.content
+      }));
     }
 
-    try {
-      const result = await toolNode.invoke({ messages: state.messages });
-      const toolMessages = result.messages as BaseMessage[];
-
-      for (const tm of toolMessages) {
-        const name = (tm as any).name ?? "unknown";
-        addEvent(events, toolEvent({
-          name, phase: "end", summary: "ok",
-          data: typeof tm.content === "string" ? tm.content.slice(0, 500) : tm.content
-        }));
-      }
-
-      const prevResults = Array.isArray(state.toolResults) ? state.toolResults as any[] : [];
-      return {
-        messages: toolMessages,
-        toolResults: [...prevResults, ...toolMessages.map(m => ({ name: (m as any).name, content: m.content }))],
-        graphEvents: [...state.graphEvents, ...events]
-      };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      addEvent(events, toolEvent({ name: "tool_node", phase: "error", summary: msg }));
-      addEvent(events, nodeEvent({ node: "tool_node", phase: "error", summary: msg }));
-      return { graphEvents: [...state.graphEvents, ...events] };
-    }
-  };
+    const prevResults = Array.isArray(state.toolResults) ? state.toolResults as any[] : [];
+    return {
+      messages: toolMessages,
+      toolResults: [...prevResults, ...toolMessages.map(m => ({ name: (m as any).name, content: m.content }))],
+      graphEvents: [...state.graphEvents, ...events]
+    };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    addEvent(events, toolEvent({ name: "tool_node", phase: "error", summary: msg }));
+    addEvent(events, nodeEvent({ node: "tool_node", phase: "error", summary: msg }));
+    return { graphEvents: [...state.graphEvents, ...events] };
+  }
 }
 
 // ── 节点：respond ───────────────────────────────────────────────────────
@@ -289,7 +286,7 @@ export function buildV2Graph(deps: Deps) {
     .addNode("router_intent", (s: GraphStateType) => routeIntentNode(s, deps))
     .addNode("prepare_agent", (s: GraphStateType) => prepareAgentNode(s, deps))
     .addNode("llm_call", (s: GraphStateType) => llmCallNode(s, deps))
-    .addNode("tool_node", buildToolNodeWithEvents(deps))
+    .addNode("tool_node", (s: GraphStateType) => toolNode(s, deps))
     .addNode("respond", respondNode);
 
   graph.addEdge(START, "ingest");

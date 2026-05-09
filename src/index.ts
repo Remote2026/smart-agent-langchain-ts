@@ -21,8 +21,7 @@ const appConfig = loadAppConfig();
  */
 const tools = createTools({
   smartThings: new SmartThingsClient(appConfig.env.SMARTTHINGS_PAT),
-  rosbridge: new RosbridgeClient(appConfig.env.ROSBRIDGE_URL),
-  aliases: appConfig.aliases
+  rosbridge: new RosbridgeClient(appConfig.env.ROSBRIDGE_URL)
 });
 
 const agent = new SmartAgent({

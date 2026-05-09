@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { config as loadEnv } from "dotenv";
 import { z } from "zod";
 
@@ -14,28 +12,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000)
 });
 
-const aliasSchema = z.object({
-  aliases: z.record(
-    z.string(),
-    z.object({
-      deviceId: z.string().min(1),
-      room: z.string().optional(),
-      type: z.string().optional()
-    })
-  )
-});
-
-export type DeviceAliases = z.infer<typeof aliasSchema>;
-
 export function loadAppConfig() {
   const env = envSchema.parse(process.env);
-  const aliasPath = path.resolve(process.cwd(), "config", "device-aliases.json");
-  const aliases = fs.existsSync(aliasPath)
-    ? aliasSchema.parse(JSON.parse(fs.readFileSync(aliasPath, "utf8")))
-    : { aliases: {} };
-
-  return {
-    env,
-    aliases
-  };
+  return { env };
 }

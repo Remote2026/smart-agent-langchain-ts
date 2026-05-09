@@ -1,23 +1,13 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import type { DeviceAliases } from "../config.js";
 import { RosbridgeClient } from "./ros2.js";
 import { SmartThingsClient } from "./smartthings.js";
 
 export function createTools(options: {
   smartThings: SmartThingsClient;
   rosbridge: RosbridgeClient;
-  aliases: DeviceAliases;
 }) {
-  const { smartThings, rosbridge, aliases } = options;
-  /**
-   * tools 的定位：
-   * - 这是 LangGraph / LLM 可调用的“外部能力接口”
-   * - SmartThings/ROS2 属于“有副作用工具”，需要在 graph node 中做最小约束（白名单/参数范围）
-   */
-  const aliasInput = z.object({
-    alias: z.string().min(1).describe("Natural-language device name or alias")
-  });
+  const { smartThings, rosbridge } = options;
   const setSwitchInput = z.object({
     deviceId: z.string().min(1),
     on: z.boolean()
@@ -34,24 +24,6 @@ export function createTools(options: {
     value: z.unknown().describe("JSON-serializable parameter value")
   });
   return [
-    new DynamicStructuredTool({
-      name: "smartthings_resolve_alias",
-      description:
-        "Resolve a natural-language device alias such as 客厅灯 to a SmartThings deviceId. Use before controlling a named device.",
-      schema: aliasInput,
-      func: async (input) => {
-        const { alias } = aliasInput.parse(input);
-        const match = aliases.aliases[alias];
-        if (!match) {
-          return JSON.stringify({
-            found: false,
-            message: "Alias not found. Use smartthings_list_devices or ask the user to choose a device."
-          });
-        }
-
-        return JSON.stringify({ found: true, ...match });
-      }
-    }),
     new DynamicStructuredTool({
       name: "smartthings_list_devices",
       description: "List SmartThings devices available to the configured personal access token.",
