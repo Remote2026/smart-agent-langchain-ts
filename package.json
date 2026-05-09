@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:chat": "tsx scripts/test-chat.ts",
-    "test:v2-graph": "tsx scripts/test-v2-graph-regressions.ts"
+    "test:device-event": "tsx scripts/test-device-event.ts"
   },
   "dependencies": {
     "@langchain/core": "^0.3.79",
