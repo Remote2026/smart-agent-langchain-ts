@@ -164,8 +164,12 @@ app.post("/api/device-event", async (request, response) => {
   // SSE 广播 emit：写入所有已连接客户端
   const emit = (event: ChatEventOut) => {
     for (const client of sseClients) {
-      client.write(`event: ${event.type}\n`);
-      client.write(`data: ${JSON.stringify(event)}\n\n`);
+      try {
+        client.write(`event: ${event.type}\n`);
+        client.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        sseClients.delete(client);
+      }
     }
     logManager.append(event);
   };
