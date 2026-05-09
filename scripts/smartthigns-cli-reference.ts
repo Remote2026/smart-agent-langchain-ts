@@ -22,6 +22,15 @@ interface StatusData {
     };
 }
 
+interface DeviceEventPayload {
+  deviceId: string;
+  deviceName: string;
+  capability: string;
+  previousValue: string;
+  currentValue: string;
+  timestamp: string;
+}
+
 interface ComponentStatus {
     [capability: string]: StatusData;
 }
@@ -221,8 +230,22 @@ async function pollLoop(options: PollerOptions): Promise<void> {
                     console.log(`device id: ${deviceId}`);
                     console.log(`contact status: ${prevContact} -> ${currentContact} *** CHANGED ***`);
                     console.log("-".repeat(40));
-                    ///发送信息到Openclaw
-                    ///占位 - 这里可以添加发送到Openclaw的代码，例如调用API或执行其他操作
+                    // 通知 Agent 设备状态变化
+                    const payload: DeviceEventPayload = {
+                      deviceId,
+                      deviceName: deviceLabel,
+                      capability: "contact",
+                      previousValue: prevContact ?? "",
+                      currentValue: currentContact ?? "",
+                      timestamp: new Date().toISOString()
+                    };
+                    fetch("http://localhost:3000/api/device-event", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(payload)
+                    }).catch(() => {
+                      console.log("   警告: 无法连接到 Agent API");
+                    });
                 } else {
                     console.log(`device name: ${deviceLabel} (${deviceName})`);
                     console.log(`device id: ${deviceId}`);
