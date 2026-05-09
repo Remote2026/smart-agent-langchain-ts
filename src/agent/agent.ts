@@ -154,4 +154,72 @@ export class SmartAgent {
     });
   }
 
+  async handleDeviceEvent(input: { sessionId: string; message: InputMessage; emit: EmitEvent }): Promise<void> {
+    input.emit({
+      sessionId: input.sessionId,
+      channel: "web",
+      type: "status",
+      payload: { status: "thinking" }
+    });
+
+    let lastSeenGraphEventCount = 0;
+    let lastFinalText = "";
+
+    try {
+      const initialGraphState = {
+        sessionId: input.sessionId,
+        input: input.message,
+        messages: [new HumanMessage(input.message.text)],
+        graphEvents: [],
+        eventType: "device_event" as const
+      };
+
+      const stream = await this.v2Graph.stream(
+        initialGraphState,
+        {
+          streamMode: "values",
+          recursionLimit: 12,
+          configurable: { thread_id: input.sessionId }
+        }
+      );
+
+      for await (const chunk of stream) {
+        const v2State = chunk as any;
+        if (!v2State || !Array.isArray(v2State.graphEvents)) {
+          continue;
+        }
+
+        lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
+
+        const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
+        lastSeenGraphEventCount = v2State.graphEvents.length;
+        for (const ev of newEvents) {
+          input.emit(graphEventToSse(input.sessionId, ev));
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.emit({
+        sessionId: input.sessionId,
+        channel: "web",
+        type: "error",
+        payload: { message }
+      });
+      throw error;
+    }
+
+    input.emit({
+      sessionId: input.sessionId,
+      channel: "web",
+      type: "final",
+      payload: { text: lastFinalText }
+    });
+    input.emit({
+      sessionId: input.sessionId,
+      channel: "web",
+      type: "status",
+      payload: { status: "done" }
+    });
+  }
+
 }
