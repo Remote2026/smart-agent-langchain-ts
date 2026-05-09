@@ -42,3 +42,13 @@ export type AgentState = {
   finalText?: string;
   graphEvents: GraphEvent[];
 };
+
+export const DeviceEventRequestSchema = z.object({
+  deviceId: z.string().min(1),
+  deviceName: z.string().min(1),
+  capability: z.string().min(1),
+  previousValue: z.string(),
+  currentValue: z.string(),
+  timestamp: z.string().min(1)
+});
+export type DeviceEventRequest = z.infer<typeof DeviceEventRequestSchema>;
