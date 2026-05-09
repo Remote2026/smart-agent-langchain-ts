@@ -45,10 +45,8 @@ export type AgentState = {
 
 export const DeviceEventRequestSchema = z.object({
   deviceId: z.string().min(1),
-  deviceName: z.string().min(1),
-  capability: z.string().min(1),
-  previousValue: z.string(),
-  currentValue: z.string(),
-  timestamp: z.string().min(1)
+  name: z.string().min(1),
+  label: z.string().optional(),
+  type: z.string().optional(),
 });
 export type DeviceEventRequest = z.infer<typeof DeviceEventRequestSchema>;

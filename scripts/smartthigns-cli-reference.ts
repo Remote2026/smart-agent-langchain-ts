@@ -24,11 +24,9 @@ interface StatusData {
 
 interface DeviceEventPayload {
   deviceId: string;
-  deviceName: string;
-  capability: string;
-  previousValue: string;
-  currentValue: string;
-  timestamp: string;
+  name: string;
+  label?: string;
+  type?: string;
 }
 
 interface ComponentStatus {
@@ -233,11 +231,9 @@ async function pollLoop(options: PollerOptions): Promise<void> {
                     // 通知 Agent 设备状态变化
                     const payload: DeviceEventPayload = {
                       deviceId,
-                      deviceName: deviceLabel,
-                      capability: "contact",
-                      previousValue: prevContact ?? "",
-                      currentValue: currentContact ?? "",
-                      timestamp: new Date().toISOString()
+                      name: deviceName,
+                      label: deviceLabel,
+                      type: device.type
                     };
                     fetch("http://localhost:3000/api/device-event", {
                       method: "POST",

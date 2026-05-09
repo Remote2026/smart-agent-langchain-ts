@@ -42,6 +42,11 @@ export class RosbridgeClient {
     return { ok: true };
   }
 
+  async driveRobotCloseFridgeDoor(): Promise<{ ok: true }> {
+    console.log("ros2_drive_robot_close_fridge_door triggered (TODO: implement ROS2 action)");
+    return { ok: true };
+  }
+
   private callService(service: string, args: Record<string, unknown>): Promise<RosbridgeServiceResponseMessage> {
     const id = `call:${Date.now()}:${this.requestCounter++}`;
 

@@ -77,6 +77,12 @@ export function createTools(options: {
         const { node, name, value } = setParamInput.parse(input);
         return JSON.stringify(await rosbridge.setParam(node, name, value));
       }
+    }),
+    new DynamicStructuredTool({
+      name: "ros2_drive_robot_close_fridge_door",
+      description: "Drive the robot to close the fridge door.",
+      schema: z.object({}),
+      func: async () => JSON.stringify(await rosbridge.driveRobotCloseFridgeDoor())
     })
   ];
 }

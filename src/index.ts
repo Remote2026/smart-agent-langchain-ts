@@ -159,7 +159,8 @@ app.post("/api/device-event", async (request, response) => {
 
   const ev = parsed.data;
   const sessionId = `device-${crypto.randomUUID()}`;
-  const eventText = `设备事件：${ev.deviceName}(${ev.deviceId}) ${ev.capability} 从 ${ev.previousValue} 变为 ${ev.currentValue}`;
+  const deviceLabel = ev.label || ev.name;
+  const eventText = `设备事件：${deviceLabel}(${ev.deviceId}) 状态已更新`;
 
   // SSE 广播 emit：写入所有已连接客户端
   const emit = (event: ChatEventOut) => {
