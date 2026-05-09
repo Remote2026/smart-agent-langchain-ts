@@ -8,7 +8,7 @@ import { createTools } from "./tools/index.js";
 import { RosbridgeClient } from "./tools/ros2.js";
 import { SmartThingsClient } from "./tools/smartthings.js";
 import type { ChatEventOut } from "./types.js";
-import { ChatRequestSchema } from "./agent/v2/state.js";
+import { ChatRequestSchema, DeviceEventRequestSchema } from "./agent/v2/state.js";
 import { LogManager } from "./logging/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -45,6 +45,9 @@ const app = express();
 // 纯文本模式：1MB 足够，并且能避免异常大请求占用内存。
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.resolve(__dirname, "..", "public")));
+
+// SSE 客户端集合：用于设备事件广播到所有已连接的 Web UI
+const sseClients = new Set<import("http").ServerResponse>();
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
@@ -103,6 +106,11 @@ app.post("/api/chat", async (request, response) => {
     "X-Accel-Buffering": "no"
   });
 
+  sseClients.add(response);
+  request.on("close", () => {
+    sseClients.delete(response);
+  });
+
   const emit = (event: ChatEventOut) => {
     // 约定：每条 SSE 消息都包含 event type（事件名）+ data（JSON 字符串）
     // 前端可以按 event.type 分发：status/tool/final/error...
@@ -140,6 +148,53 @@ app.post("/api/chat", async (request, response) => {
   } finally {
     response.end();
   }
+});
+
+app.post("/api/device-event", async (request, response) => {
+  const parsed = DeviceEventRequestSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ ok: false, message: "Invalid device event body." });
+    return;
+  }
+
+  const ev = parsed.data;
+  const sessionId = `device-${crypto.randomUUID()}`;
+  const eventText = `设备事件：${ev.deviceName}(${ev.deviceId}) ${ev.capability} 从 ${ev.previousValue} 变为 ${ev.currentValue}`;
+
+  // SSE 广播 emit：写入所有已连接客户端
+  const emit = (event: ChatEventOut) => {
+    for (const client of sseClients) {
+      client.write(`event: ${event.type}\n`);
+      client.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+    logManager.append(event);
+  };
+
+  emit({
+    sessionId,
+    channel: "web",
+    type: "status",
+    payload: { status: "device_event_received" }
+  });
+
+  try {
+    await agent.handleDeviceEvent({
+      sessionId,
+      message: { kind: "text", text: eventText },
+      emit
+    });
+  } catch (error) {
+    emit({
+      sessionId,
+      channel: "web",
+      type: "error",
+      payload: {
+        message: error instanceof Error ? error.message : String(error)
+      }
+    });
+  }
+
+  response.json({ ok: true });
 });
 
 app.listen(appConfig.env.PORT, () => {

@@ -47,7 +47,7 @@ export type ChatEventOut =
     sessionId: string;
     channel: Channel;
     type: "status";
-    payload: { status: "thinking" | "done" };
+    payload: { status: "thinking" | "done" | "device_event_received" };
   }
   /**
    * V2：node 事件用于前端展示“Graph Steps”（每个图节点的进度）。
