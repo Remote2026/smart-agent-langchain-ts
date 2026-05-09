@@ -23,6 +23,7 @@ const MAX_HISTORY = 50;
 
 const GraphState = Annotation.Root({
   sessionId: Annotation<string>({ reducer: (_, n) => n, default: () => "" }),
+  eventType: Annotation<"chat" | "device_event">({ reducer: (_, n) => n, default: () => "chat" }),
   input: Annotation<InputMessage>({ reducer: (_, n) => n, default: () => ({ kind: "text", text: "" }) }),
   messages: Annotation<BaseMessage[]>({
     reducer: (prev, next) => {
