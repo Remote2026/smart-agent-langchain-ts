@@ -8,6 +8,9 @@ export function createTools(options: {
   rosbridge: RosbridgeClient;
 }) {
   const { smartThings, rosbridge } = options;
+  const getDeviceStatusInput = z.object({
+    deviceId: z.string().min(1).describe("SmartThings device ID")
+  });
   const setSwitchInput = z.object({
     deviceId: z.string().min(1),
     on: z.boolean()
@@ -26,9 +29,18 @@ export function createTools(options: {
   return [
     new DynamicStructuredTool({
       name: "smartthings_list_devices",
-      description: "List SmartThings devices available to the configured personal access token.",
+      description: "List SmartThings devices available via SmartThings CLI.",
       schema: z.object({}),
       func: async () => JSON.stringify(await smartThings.listDevices())
+    }),
+    new DynamicStructuredTool({
+      name: "smartthings_get_device_status",
+      description: "Get detailed status of a specific SmartThings device by its ID.",
+      schema: getDeviceStatusInput,
+      func: async (input) => {
+        const { deviceId } = getDeviceStatusInput.parse(input);
+        return JSON.stringify(await smartThings.getDeviceStatus(deviceId));
+      }
     }),
     new DynamicStructuredTool({
       name: "smartthings_set_switch",

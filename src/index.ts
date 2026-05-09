@@ -20,7 +20,7 @@ const appConfig = loadAppConfig();
  * HTTP /api/chat -> SmartAgent -> (LangGraph StateGraph) -> tools(smartthings_* / ros2_*) -> SSE -> Web UI
  */
 const tools = createTools({
-  smartThings: new SmartThingsClient(appConfig.env.SMARTTHINGS_PAT),
+  smartThings: new SmartThingsClient(),
   rosbridge: new RosbridgeClient(appConfig.env.ROSBRIDGE_URL)
 });
 

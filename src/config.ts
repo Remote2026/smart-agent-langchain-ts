@@ -7,8 +7,7 @@ const envSchema = z.object({
   OPENAI_BASE_URL: z.string().url().default("https://dashscope.aliyuncs.com/compatible-mode/v1"),
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().min(1).default("qwen-turbo"),
-  SMARTTHINGS_PAT: z.string().min(1).optional(),
-  ROSBRIDGE_URL: z.string().url().default("ws://localhost:9090"),
+ROSBRIDGE_URL: z.string().url().default("ws://localhost:9090"),
   PORT: z.coerce.number().int().positive().default(3000)
 });
 

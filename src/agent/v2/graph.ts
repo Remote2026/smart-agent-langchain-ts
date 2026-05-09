@@ -44,7 +44,7 @@ type GraphStateType = typeof GraphState.State;
 // ── 事件工具 ────────────────────────────────────────────────────────────
 function addEvent(events: GraphEvent[], ev: GraphEvent) {
   events.push(ev);
-  console.log(ev);
+  console.log(`GraphEvent: ${ev.type === "node" ? `[${ev.node}]` : `[tool:${ev.name}]`} ${ev.phase} - ${ev.summary}`);
 }
 
 // ── 工具选择 ────────────────────────────────────────────────────────────
@@ -235,16 +235,17 @@ async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<Grap
       }));
     }
 
-    const prevResults = Array.isArray(state.toolResults) ? state.toolResults as any[] : [];
+    interface ToolResult { name: string; content: unknown }
+    const prevResults = Array.isArray(state.toolResults) ? state.toolResults as ToolResult[] : [];
+    const newResults: ToolResult[] = toolMessages.map(m => ({ name: (m as any).name ?? "unknown", content: m.content }));
     return {
       messages: toolMessages,
-      toolResults: [...prevResults, ...toolMessages.map(m => ({ name: (m as any).name, content: m.content }))],
+      toolResults: [...prevResults, ...newResults],
       graphEvents: [...state.graphEvents, ...events]
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     addEvent(events, toolEvent({ name: "tool_node", phase: "error", summary: msg }));
-    addEvent(events, nodeEvent({ node: "tool_node", phase: "error", summary: msg }));
     return { graphEvents: [...state.graphEvents, ...events] };
   }
 }

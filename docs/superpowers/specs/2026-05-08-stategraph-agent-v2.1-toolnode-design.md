@@ -112,14 +112,20 @@ V2 的 GraphState 保持不变（sessionId / input / messages / userText / inten
 | 新增领域成本 | 写新节点 + 注册边 | 注册 tools + 更新 router prompt |
 | 循环安全 | 无（线性流程） | 最大 5 轮 |
 
-## 8. 风险与约束
+## 8. SmartThings 工具实现方式
+
+- `smartthings_list_devices`：通过 CLI `smartthings devices -j` 获取设备列表，无需 PAT
+- `smartthings_set_switch` / `smartthings_set_level`：暂为空实现，后续通过 CLI `smartthings devices:commands` 补充
+- CLI 认证由用户事先执行 `smartthings login` 完成，代码不处理 token
+
+## 9. 风险与约束
 
 - **LLM tool calling 可靠性**：依赖模型 tool calling 能力，需选择支持 function calling 的模型
 - **循环退出保证**：最大 5 轮硬限制，避免无限循环耗 token
 - **Tool 副作用安全**：tool 层面已有参数校验（deviceId 非空、level 范围），保持不变
 - **向后兼容**：GraphEvent 协议不变，前端无需改动
 
-## 9. Done Criteria
+## 10. Done Criteria
 
 - 图结构改为 5 节点 + 条件循环，不再有 smartthings_node / ros2_node / default_node
 - LLM 使用 bindTools + ToolNode 自主调用 tools
