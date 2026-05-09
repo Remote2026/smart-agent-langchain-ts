@@ -29,7 +29,7 @@ export function createTools(options: {
   return [
     new DynamicStructuredTool({
       name: "smartthings_list_devices",
-      description: "List SmartThings devices available via SmartThings CLI.",
+      description: "List SmartThings devices available via SmartThings CLI. get device id, name, label and type and etc.",
       schema: z.object({}),
       func: async () => JSON.stringify(await smartThings.listDevices())
     }),
