@@ -311,7 +311,13 @@ export function buildV2Graph(deps: Deps) {
     .addNode("respond", respondNode);
 
   graph.addEdge("inject_device_event", "prepare_agent");
-  graph.addEdge(START, "ingest");
+  // START 根据 eventType 分流：chat → ingest，device_event → inject_device_event
+  graph.addConditionalEdges(START, (s: GraphStateType) => {
+    return s.eventType === "device_event" ? "inject_device_event" : "ingest";
+  }, {
+    "inject_device_event": "inject_device_event",
+    "ingest": "ingest"
+  });
   graph.addEdge("ingest", "router_intent");
   graph.addEdge("router_intent", "prepare_agent");
   graph.addEdge("prepare_agent", "llm_call");
