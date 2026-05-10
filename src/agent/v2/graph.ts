@@ -92,19 +92,19 @@ async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType
   };
 }
 
-// ── 节点：inject_device_event ────────────────────────────────────────────
-// 设备事件入口：构造事件消息，设置 intent=smartthings（跳过 router），直接进 prepare_agent
+// ── 节点：device_ingest ────────────────────────────────────────────
+// 设备事件入口：构造事件消息，设置 intent=ros2（跳过 router），直接进 prepare_agent
 
-async function injectDeviceEventNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
+async function deviceIngestNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "inject_device_event", phase: "start", summary: "device event received" }));
+  addEvent(events, nodeEvent({ node: "device_ingest", phase: "start", summary: "device event received" }));
 
   const userText = state.input.text;
-  addEvent(events, nodeEvent({ node: "inject_device_event", phase: "end", summary: "intent=smartthings" }));
+  addEvent(events, nodeEvent({ node: "device_ingest", phase: "end", summary: "intent=ros2" }));
 
   return {
     userText,
-    intent: "smartthings",
+    intent: "ros2",
     finalText: undefined,
     graphEvents: [...state.graphEvents, ...events]
   };
@@ -306,19 +306,19 @@ function safeJsonParse(text: string): unknown {
 export function buildV2Graph(deps: Deps) {
   const graph = new StateGraph(GraphState)
     .addNode("ingest", ingestNode)
-    .addNode("inject_device_event", injectDeviceEventNode)
+    .addNode("device_ingest", deviceIngestNode)
     .addNode("router_intent", (s: GraphStateType) => routeIntentNode(s, deps))
     .addNode("prepare_agent", (s: GraphStateType) => prepareAgentNode(s, deps))
     .addNode("llm_call", (s: GraphStateType) => llmCallNode(s, deps))
     .addNode("tool_node", (s: GraphStateType) => toolNode(s, deps))
     .addNode("respond", respondNode);
 
-  graph.addEdge("inject_device_event", "prepare_agent");
-  // START 根据 eventType 分流：chat → ingest，device_event → inject_device_event
+  graph.addEdge("device_ingest", "prepare_agent");
+  // START 根据 eventType 分流：chat → ingest，device_event → device_ingest
   graph.addConditionalEdges(START, (s: GraphStateType) => {
-    return s.eventType === "device_event" ? "inject_device_event" : "ingest";
+    return s.eventType === "device_event" ? "device_ingest" : "ingest";
   }, {
-    "inject_device_event": "inject_device_event",
+    "device_ingest": "device_ingest",
     "ingest": "ingest"
   });
   graph.addEdge("ingest", "router_intent");
