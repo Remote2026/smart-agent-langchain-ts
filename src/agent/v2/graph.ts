@@ -17,7 +17,7 @@ type Deps = {
 };
 
 // ── 扁平化 GraphState ──────────────────────────────────────────────────
-// 数据流: ingest → router_intent → prepare_agent → llm_call ⇄ tool_node → respond
+// 数据流: ingest → router_intent → configure_agent → llm_call ⇄ tool_node → respond
 // llm_call 与 tool_node 之间构成 agent 循环（最多 5 轮），LLM 自主决定调用哪些 tool
 const MAX_HISTORY = 50;
 
@@ -28,7 +28,15 @@ const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
     reducer: (prev, next) => {
       const merged = [...prev, ...next];
-      return merged.length > MAX_HISTORY ? merged.slice(-MAX_HISTORY) : merged;
+      // 去重 SystemMessage：只保留最后一条，避免 checkpoint 积累多条
+      const sysIdxs: number[] = [];
+      merged.forEach((m, i) => { if (m instanceof SystemMessage) sysIdxs.push(i); });
+      let cleaned = merged;
+      if (sysIdxs.length > 1) {
+        const keep = sysIdxs[sysIdxs.length - 1];
+        cleaned = merged.filter((_, i) => sysIdxs.includes(i) ? i === keep : true);
+      }
+      return cleaned.length > MAX_HISTORY ? cleaned.slice(-MAX_HISTORY) : cleaned;
     },
     default: () => []
   }),
@@ -69,10 +77,10 @@ async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType
   const events: GraphEvent[] = [];
   addEvent(events, nodeEvent({ node: "ingest", phase: "start", summary: "validating text input" }));
 
+  console.debug(state.input.text);
+
   const trimmed = state.input.text.trim();
   if (!trimmed) {
-    addEvent(events, nodeEvent({ node: "ingest", phase: "error", summary: "empty text" }));
-    addEvent(events, nodeEvent({ node: "ingest", phase: "end", summary: "fallback to default" }));
     return {
       userText: "",
       intent: "default",
@@ -93,7 +101,7 @@ async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType
 }
 
 // ── 节点：device_ingest ────────────────────────────────────────────
-// 设备事件入口：构造事件消息，设置 intent=ros2（跳过 router），直接进 prepare_agent
+// 设备事件入口：构造事件消息，设置 intent=ros2（跳过 router），直接进 configure_agent
 
 async function deviceIngestNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
@@ -166,20 +174,18 @@ async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Parti
   return { intent, graphEvents: [...state.graphEvents, ...events] };
 }
 
-// ── 节点：prepare_agent ─────────────────────────────────────────────────
+// ── 节点：configure_agent ─────────────────────────────────────────────────
 // 注入 system prompt + 重置循环计数器。SystemMessage 只写一次（checkpoint 持久化后跨轮复用）
 
-async function prepareAgentNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
+async function setAgentContextNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "prepare_agent", phase: "start", summary: `intent=${state.intent ?? "default"}` }));
+  addEvent(events, nodeEvent({ node: "configure_agent", phase: "start", summary: `intent=${state.intent ?? "default"}` }));
 
   // 跨轮去重：checkpoint 恢复的 messages 可能已含 SystemMessage
   const hasSystem = state.messages.some(m => m instanceof SystemMessage);
   const systemMessages: BaseMessage[] = hasSystem ? [] : [new SystemMessage(deps.systemPrompt)];
 
-  const tools = selectTools(state.intent, deps.tools);
-  const names = tools.map(t => t.name).join(", ");
-  addEvent(events, nodeEvent({ node: "prepare_agent", phase: "end", summary: `tools: ${names}` }));
+  addEvent(events, nodeEvent({ node: "configure_agent", phase: "end", summary: "context ready" }));
 
   return {
     messages: systemMessages,
@@ -308,12 +314,12 @@ export function buildV2Graph(deps: Deps) {
     .addNode("ingest", ingestNode)
     .addNode("device_ingest", deviceIngestNode)
     .addNode("router_intent", (s: GraphStateType) => routeIntentNode(s, deps))
-    .addNode("prepare_agent", (s: GraphStateType) => prepareAgentNode(s, deps))
+    .addNode("configure_agent", (s: GraphStateType) => setAgentContextNode(s, deps))
     .addNode("llm_call", (s: GraphStateType) => llmCallNode(s, deps))
     .addNode("tool_node", (s: GraphStateType) => toolNode(s, deps))
     .addNode("respond", respondNode);
 
-  graph.addEdge("device_ingest", "prepare_agent");
+  graph.addEdge("device_ingest", "configure_agent");
   // START 根据 eventType 分流：chat → ingest，device_event → device_ingest
   graph.addConditionalEdges(START, (s: GraphStateType) => {
     return s.eventType === "device_event" ? "device_ingest" : "ingest";
@@ -322,8 +328,8 @@ export function buildV2Graph(deps: Deps) {
     "ingest": "ingest"
   });
   graph.addEdge("ingest", "router_intent");
-  graph.addEdge("router_intent", "prepare_agent");
-  graph.addEdge("prepare_agent", "llm_call");
+  graph.addEdge("router_intent", "configure_agent");
+  graph.addEdge("configure_agent", "llm_call");
 
   // llm_call 之后：有 tool_calls → 执行 tool；无 → 直接回复
   graph.addConditionalEdges("llm_call", (s: GraphStateType) => {

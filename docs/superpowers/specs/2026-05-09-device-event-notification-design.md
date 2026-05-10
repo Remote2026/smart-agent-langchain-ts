@@ -12,7 +12,7 @@ SmartThings CLI 轮询脚本检测到设备状态变化后，通过 API 通知 A
 SmartThings CLI 轮询 (独立进程)
   → POST /api/device-event
     → inject_device_event 节点
-      → prepare_agent → llm_call ⇄ tool_node → respond
+      → prepare_agent(configure_agent) → llm_call ⇄ tool_node → respond
         → SSE 推 Web UI
         → Slack 占位 (TODO)
         → Tool 动作 占位 (TODO)
