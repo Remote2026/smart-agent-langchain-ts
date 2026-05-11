@@ -65,12 +65,14 @@ function broadcastSse(event: ChatEventOut): void {
   logManager.append(event);
 }
 
-// ---- Slack 相关（可选） ----
+// ---- Slack 相关（可选，SLACK_ENABLED=true 时启用） ----
 
 import type { App as SlackApp } from "@slack/bolt";
-let slackApp: SlackApp | undefined;
+let slackApp: SlackApp | undefined;       // Bolt App 实例，供 SIGINT 优雅关闭
 let slackNotifier: SlackNotifier | undefined;
 
+// 防回环第1层：只有 channel === "web" 的 final/error 才 mirror 到 Slack
+// Slack 触发的事件 (channel="slack") 绝不走进 mirror，避免重复发回 Slack
 function maybeMirrorToSlack(event: ChatEventOut, threadTs?: string): void {
   if (!slackNotifier) return;
   if (event.channel !== "web") return;
@@ -157,13 +159,14 @@ app.post("/api/chat", async (request, response) => {
     sseClients.delete(response);
   });
 
+  // mirrorThreadTs：Web→Slack mirror 时，用户消息的 Slack ts 作为 thread 根
   let mirrorThreadTs: string | undefined;
 
   const emit = (event: ChatEventOut) => {
     response.write(`event: ${event.type}\n`);
     response.write(`data: ${JSON.stringify(event)}\n\n`);
     logManager.append(event);
-    maybeMirrorToSlack(event, mirrorThreadTs);
+    maybeMirrorToSlack(event, mirrorThreadTs); // Web→Slack mirror 旁路
   };
 
   if (message.kind !== "text") {
@@ -177,7 +180,7 @@ app.post("/api/chat", async (request, response) => {
     return;
   }
 
-  // Web -> Slack mirror：先发用户消息到 Slack 默认频道
+  // Web → Slack mirror：先发用户消息到 Slack 默认频道，记录 ts 作为后续 thread 根
   if (slackNotifier) {
     const ts = await slackNotifier.mirrorWebUserMessage(message.text);
     if (ts) mirrorThreadTs = ts;
@@ -257,15 +260,17 @@ app.post("/api/device-event", async (request, response) => {
 });
 
 // -------------------------------------------------
-// Start
+// Start — Express + 可选的 Slack Socket Mode
 // -------------------------------------------------
 
 app.listen(appConfig.env.PORT, () => {
   console.log(`Smart Agent web chat is running at http://localhost:${appConfig.env.PORT}`);
 
+  // Slack 为可选功能：SLACK_ENABLED=true 时才启动 Socket Mode
   if (appConfig.env.SLACK_ENABLED) {
     startSlackApp({ agent, broadcastSse }).then((app) => {
       slackApp = app;
+      // Notifier 在 Slack App 启动后初始化（需要 app.client）
       if (appConfig.env.SLACK_MIRROR_WEB_MESSAGES && appConfig.env.SLACK_DEFAULT_CHANNEL_ID) {
         slackNotifier = createSlackNotifier(
           app.client,
@@ -279,6 +284,7 @@ app.listen(appConfig.env.PORT, () => {
   }
 });
 
+// 优雅关闭：SIGINT 时断开 Slack WebSocket，避免孤立连接
 process.on("SIGINT", () => {
   if (slackApp) {
     slackApp.stop().catch(() => {});

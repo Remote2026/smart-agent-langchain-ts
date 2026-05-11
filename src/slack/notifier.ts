@@ -1,3 +1,10 @@
+/**
+ * SlackNotifier：Web/设备事件 → Slack 单向同步
+ *
+ * 职责：封装向 Slack 默认频道主动发消息的能力，供 /api/chat 和 /api/device-event 的 mirror 逻辑调用。
+ * 不处理 Slack inbound 事件（那是 transport.ts 的职责），
+ * 不把 Slack client 传入 Agent（保持 Agent 对传输层无感）。
+ */
 import type { WebClient } from "@slack/web-api";
 
 export type SlackNotifier = {

@@ -66,6 +66,7 @@ export class SmartAgent {
     });
   }
 
+  // channel 参数支持多 transport：Web 传入 "web"，Slack 传入 "slack"（默认 "web" 保持向后兼容）
   async handleUserMessage(input: { sessionId: string; message: InputMessage; emit: EmitEvent; channel?: Channel }): Promise<void> {
     const channel = input.channel ?? "web";
     // 1) 通知前端：进入思考/执行流程（SSE 事件）
@@ -136,6 +137,7 @@ export class SmartAgent {
         type: "error",
         payload: { message }
       });
+      // 注意：只 return 不 throw，避免调用方 catch 块重复 emit error 事件（Slack mirror 会发两次）
       return;
     }
 

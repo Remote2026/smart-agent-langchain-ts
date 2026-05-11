@@ -1,3 +1,13 @@
+/**
+ * Slack App（Socket Mode 启动）
+ *
+ * 职责：
+ * 1. 创建 Bolt App（Socket Mode，无公网 HTTPS endpoint）
+ * 2. 注册 app_mention 和 DM (message.im) 事件监听
+ * 3. 将有效事件委托给 SlackTransport 处理
+ * 4. Socket Mode 自动确认事件（ack 由 Bolt 内部处理，不需要手动调用）
+ * 5. 返回 App 实例供 index.ts 生命周期管理（优雅关闭、Notifier 初始化）
+ */
 import { App, type AppOptions } from "@slack/bolt";
 import type { ChatEventOut } from "../types.js";
 import type { SmartAgent } from "../agent/agent.js";

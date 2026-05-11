@@ -60,6 +60,7 @@ export function toolEvent(args: {
  * - `node` -> 新增的 SSE channel，用于前端展示“图节点进度”
  * - `tool` -> 仍复用现有 SSE `tool` 事件形状，避免前端大改
  */
+// channel 参数支持多 transport 的事件来源标记：Web → "web"，Slack → "slack"（默认 "web"）
 export function graphEventToSse(sessionId: string, event: GraphEvent, channel: Channel = "web"): ChatEventOut {
   if (event.type === "node") {
     return {
