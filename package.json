@@ -11,6 +11,8 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "tsx -e \"import{rmSync}from'fs';try{rmSync('dist',{recursive:true,force:true})}catch(_){}\"",
+
     "test": "vitest run",
     "test:watch": "vitest",
     "test:chat": "tsx scripts/test-chat.ts",
