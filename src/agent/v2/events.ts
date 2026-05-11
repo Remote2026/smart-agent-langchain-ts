@@ -1,4 +1,4 @@
-import type { ChatEventOut, GraphEvent } from "../../types.js";
+import type { Channel, ChatEventOut, GraphEvent } from "../../types.js";
 
 /**
  * V2 事件系统（GraphEvents -> SSE）
@@ -60,11 +60,11 @@ export function toolEvent(args: {
  * - `node` -> 新增的 SSE channel，用于前端展示“图节点进度”
  * - `tool` -> 仍复用现有 SSE `tool` 事件形状，避免前端大改
  */
-export function graphEventToSse(sessionId: string, event: GraphEvent): ChatEventOut {
+export function graphEventToSse(sessionId: string, event: GraphEvent, channel: Channel = "web"): ChatEventOut {
   if (event.type === "node") {
     return {
       sessionId,
-      channel: "web",
+      channel,
       type: "node",
       payload: {
         node: event.node,
@@ -80,7 +80,7 @@ export function graphEventToSse(sessionId: string, event: GraphEvent): ChatEvent
   if (event.phase === "start") {
     return {
       sessionId,
-      channel: "web",
+      channel,
       type: "tool",
       payload: { name: event.name, status: "executing", source: event.source, origin: event.origin, input: event.data }
     };
@@ -89,7 +89,7 @@ export function graphEventToSse(sessionId: string, event: GraphEvent): ChatEvent
   if (event.phase === "error") {
     return {
       sessionId,
-      channel: "web",
+      channel,
       type: "tool",
       payload: {
         name: event.name,
@@ -104,7 +104,7 @@ export function graphEventToSse(sessionId: string, event: GraphEvent): ChatEvent
 
   return {
     sessionId,
-    channel: "web",
+    channel,
     type: "tool",
     payload: { name: event.name, status: "ok", source: event.source, origin: event.origin, output: event.data }
   };

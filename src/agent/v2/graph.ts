@@ -289,7 +289,6 @@ async function respondNode(state: GraphStateType): Promise<Partial<GraphStateTyp
 
   const text = lastAi && typeof lastAi.content === "string" ? lastAi.content.trim() : (state.finalText ?? "");
 
-  // TODO: Slack App 集成 — 将 finalText 推送到 Slack
   // TODO: Tool 自动动作 — 根据设备事件触发预定义 tool（如报警、联动）
 
   if (text) {

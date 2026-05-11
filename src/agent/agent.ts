@@ -2,7 +2,7 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
-import type { ChatEventOut, GraphEvent } from "../types.js";
+import type { Channel, ChatEventOut, GraphEvent } from "../types.js";
 import type { InputMessage } from "./v2/state.js";
 import { graphEventToSse } from "./v2/events.js";
 import { buildV2Graph } from "./v2/graph.js";
@@ -66,11 +66,12 @@ export class SmartAgent {
     });
   }
 
-  async handleUserMessage(input: { sessionId: string; message: InputMessage; emit: EmitEvent }): Promise<void> {
+  async handleUserMessage(input: { sessionId: string; message: InputMessage; emit: EmitEvent; channel?: Channel }): Promise<void> {
+    const channel = input.channel ?? "web";
     // 1) 通知前端：进入思考/执行流程（SSE 事件）
     input.emit({
       sessionId: input.sessionId,
-      channel: "web",
+      channel,
       type: "status",
       payload: { status: "thinking" }
     });
@@ -124,40 +125,41 @@ export class SmartAgent {
         const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
         lastSeenGraphEventCount = v2State.graphEvents.length;
         for (const ev of newEvents) {
-          input.emit(graphEventToSse(input.sessionId, ev));
+          input.emit(graphEventToSse(input.sessionId, ev, channel));
         }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       input.emit({
         sessionId: input.sessionId,
-        channel: "web",
+        channel,
         type: "error",
         payload: { message }
       });
-      throw error;
+      return;
     }
 
     const finalText = lastFinalText;
 
     input.emit({
       sessionId: input.sessionId,
-      channel: "web",
+      channel,
       type: "final",
       payload: { text: finalText }
     });
     input.emit({
       sessionId: input.sessionId,
-      channel: "web",
+      channel,
       type: "status",
       payload: { status: "done" }
     });
   }
 
-  async handleDeviceEvent(input: { sessionId: string; message: InputMessage; emit: EmitEvent }): Promise<void> {
+  async handleDeviceEvent(input: { sessionId: string; message: InputMessage; emit: EmitEvent; channel?: Channel }): Promise<void> {
+    const channel = input.channel ?? "web";
     input.emit({
       sessionId: input.sessionId,
-      channel: "web",
+      channel,
       type: "status",
       payload: { status: "thinking" }
     });
@@ -194,29 +196,29 @@ export class SmartAgent {
         const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
         lastSeenGraphEventCount = v2State.graphEvents.length;
         for (const ev of newEvents) {
-          input.emit(graphEventToSse(input.sessionId, ev));
+          input.emit(graphEventToSse(input.sessionId, ev, channel));
         }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       input.emit({
         sessionId: input.sessionId,
-        channel: "web",
+        channel,
         type: "error",
         payload: { message }
       });
-      throw error;
+      return;
     }
 
     input.emit({
       sessionId: input.sessionId,
-      channel: "web",
+      channel,
       type: "final",
       payload: { text: lastFinalText }
     });
     input.emit({
       sessionId: input.sessionId,
-      channel: "web",
+      channel,
       type: "status",
       payload: { status: "done" }
     });

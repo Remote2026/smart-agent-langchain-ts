@@ -10,6 +10,9 @@ import type { ChatEventOut } from "./types.js";
 import { ChatRequestSchema, DeviceEventRequestSchema } from "./agent/v2/state.js";
 import { LogManager } from "./logging/index.js";
 import { DEFAULT_SESSION_ID } from "./session.js";
+import { startSlackApp } from "./slack/app.js";
+import { createSlackNotifier } from "./slack/notifier.js";
+import type { SlackNotifier } from "./slack/notifier.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +52,40 @@ app.use(express.static(path.resolve(__dirname, "..", "public")));
 // SSE 客户端集合：用于设备事件广播到所有已连接的 Web UI
 const sseClients = new Set<import("http").ServerResponse>();
 
+/** 广播 SSE 事件到所有已连接客户端，同时落盘日志 */
+function broadcastSse(event: ChatEventOut): void {
+  for (const client of sseClients) {
+    try {
+      client.write(`event: ${event.type}\n`);
+      client.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+  logManager.append(event);
+}
+
+// ---- Slack 相关（可选） ----
+
+import type { App as SlackApp } from "@slack/bolt";
+let slackApp: SlackApp | undefined;
+let slackNotifier: SlackNotifier | undefined;
+
+function maybeMirrorToSlack(event: ChatEventOut, threadTs?: string): void {
+  if (!slackNotifier) return;
+  if (event.channel !== "web") return;
+  if (event.type === "final") {
+    slackNotifier.mirrorWebFinal(event.payload.text, threadTs);
+  }
+  if (event.type === "error") {
+    slackNotifier.mirrorWebError(event.payload.message, threadTs);
+  }
+}
+
+// -------------------------------------------------
+// Routes
+// -------------------------------------------------
+
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
 });
@@ -79,10 +116,6 @@ app.get("/api/events", (request, response) => {
 });
 
 app.post("/api/chat", async (request, response) => {
-  /**
-   * V2（text-only）请求格式：
-   * - { sessionId?, message: { kind: "text", text: string } }
-   */
   const parsedRequest = ChatRequestSchema.safeParse(request.body);
   if (!parsedRequest.success) {
     const sessionId = DEFAULT_SESSION_ID;
@@ -112,18 +145,6 @@ app.post("/api/chat", async (request, response) => {
   const sessionId = DEFAULT_SESSION_ID;
   const message = body.message;
 
-  /**
-   * 说明：这里使用 SSE（Server-Sent Events）向浏览器持续推送事件流。
-   *
-   * - 这是“传输层”，负责把后端执行过程不断写给前端
-   * - Agent 内部使用 LangGraph 负责“控制流”（LLM <-> Tools 的循环）
-   * - 我们在 agent.ts 里把 LangGraph 的 stream 输出映射成 ChatEventOut
-   *
-   * 为什么选 SSE：
-   * - 浏览器原生支持 EventSource / fetch + readable stream
-   * - 单向推送足够满足“展示思考/工具/最终回答”这种 UI
-   * - 若未来需要双向实时（例如人类确认/中断恢复），再升级 WebSocket 也很自然
-   */
   response.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -136,17 +157,15 @@ app.post("/api/chat", async (request, response) => {
     sseClients.delete(response);
   });
 
+  let mirrorThreadTs: string | undefined;
+
   const emit = (event: ChatEventOut) => {
-    // 约定：每条 SSE 消息都包含 event type（事件名）+ data（JSON 字符串）
-    // 前端可以按 event.type 分发：status/tool/final/error...
     response.write(`event: ${event.type}\n`);
     response.write(`data: ${JSON.stringify(event)}\n\n`);
-
-    // 旁路：同一份事件写入日志（落盘），便于回放/排障
     logManager.append(event);
+    maybeMirrorToSlack(event, mirrorThreadTs);
   };
 
-  // Schema 已保证：message 一定存在且为 text
   if (message.kind !== "text") {
     emit({
       sessionId,
@@ -158,8 +177,13 @@ app.post("/api/chat", async (request, response) => {
     return;
   }
 
+  // Web -> Slack mirror：先发用户消息到 Slack 默认频道
+  if (slackNotifier) {
+    const ts = await slackNotifier.mirrorWebUserMessage(message.text);
+    if (ts) mirrorThreadTs = ts;
+  }
+
   try {
-    // 关键交互点：SmartAgent 内部使用 LangGraph 跑“可控的 agent 图”，并在执行过程中持续 emit SSE 事件。
     await agent.handleUserMessage({ sessionId, message, emit });
   } catch (error) {
     emit({
@@ -192,18 +216,18 @@ app.post("/api/device-event", async (request, response) => {
     : "状态已更新";
   const eventText = `设备事件：${deviceLabel}(${ev.deviceId}) ${statusText}`;
 
-  // SSE 广播 emit：写入所有已连接客户端
+  let mirrorThreadTs: string | undefined;
+
   const emit = (event: ChatEventOut) => {
-    for (const client of sseClients) {
-      try {
-        client.write(`event: ${event.type}\n`);
-        client.write(`data: ${JSON.stringify(event)}\n\n`);
-      } catch {
-        sseClients.delete(client);
-      }
-    }
-    logManager.append(event);
+    broadcastSse(event);
+    maybeMirrorToSlack(event, mirrorThreadTs);
   };
+
+  // 设备事件同步到 Slack（如开启 mirror）
+  if (slackNotifier) {
+    const ts = await slackNotifier.mirrorWebUserMessage(eventText);
+    if (ts) mirrorThreadTs = ts;
+  }
 
   emit({
     sessionId,
@@ -232,6 +256,32 @@ app.post("/api/device-event", async (request, response) => {
   response.json({ ok: true });
 });
 
+// -------------------------------------------------
+// Start
+// -------------------------------------------------
+
 app.listen(appConfig.env.PORT, () => {
   console.log(`Smart Agent web chat is running at http://localhost:${appConfig.env.PORT}`);
+
+  if (appConfig.env.SLACK_ENABLED) {
+    startSlackApp({ agent, broadcastSse }).then((app) => {
+      slackApp = app;
+      if (appConfig.env.SLACK_MIRROR_WEB_MESSAGES && appConfig.env.SLACK_DEFAULT_CHANNEL_ID) {
+        slackNotifier = createSlackNotifier(
+          app.client,
+          appConfig.env.SLACK_DEFAULT_CHANNEL_ID
+        );
+        console.log("[slack] Web->Slack mirror enabled");
+      }
+    }).catch((err) => {
+      console.error("[slack] Failed to start Slack App:", err);
+    });
+  }
+});
+
+process.on("SIGINT", () => {
+  if (slackApp) {
+    slackApp.stop().catch(() => {});
+  }
+  process.exit(0);
 });

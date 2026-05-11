@@ -1,0 +1,54 @@
+import type { WebClient } from "@slack/web-api";
+
+export type SlackNotifier = {
+  /** 发送 Web 用户消息到 Slack 默认频道，返回消息 ts 用于后续 thread 回复 */
+  mirrorWebUserMessage(text: string): Promise<string | undefined>;
+  /** 发送 Agent final 到 Slack 默认频道（同一 thread） */
+  mirrorWebFinal(text: string, threadTs?: string): Promise<void>;
+  /** 发送 Agent error 到 Slack 默认频道（同一 thread） */
+  mirrorWebError(message: string, threadTs?: string): Promise<void>;
+};
+
+export function createSlackNotifier(
+  client: WebClient,
+  defaultChannelId: string
+): SlackNotifier {
+  return {
+    async mirrorWebUserMessage(text: string) {
+      try {
+        const result = await client.chat.postMessage({
+          channel: defaultChannelId,
+          text: `Web: ${text}`
+        });
+        return result.ts;
+      } catch (err) {
+        console.error("[slack:notifier] mirrorWebUserMessage failed:", err);
+        return undefined;
+      }
+    },
+
+    async mirrorWebFinal(text: string, threadTs?: string) {
+      try {
+        await client.chat.postMessage({
+          channel: defaultChannelId,
+          text: `Agent: ${text}`,
+          thread_ts: threadTs
+        });
+      } catch (err) {
+        console.error("[slack:notifier] mirrorWebFinal failed:", err);
+      }
+    },
+
+    async mirrorWebError(message: string, threadTs?: string) {
+      try {
+        await client.chat.postMessage({
+          channel: defaultChannelId,
+          text: `处理失败：${message}`,
+          thread_ts: threadTs
+        });
+      } catch (err) {
+        console.error("[slack:notifier] mirrorWebError failed:", err);
+      }
+    }
+  };
+}
