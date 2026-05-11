@@ -6,8 +6,25 @@ const inputEl = document.querySelector("#messageInput");
 const sendButtonEl = document.querySelector("#sendButton");
 const statusEl = document.querySelector("#status");
 
-const sessionId = localStorage.getItem("smart-agent-session") || crypto.randomUUID();
+const sessionId = "web-default-session";
 localStorage.setItem("smart-agent-session", sessionId);
+
+const events = new EventSource("/api/events");
+
+for (const type of ["status", "node", "tool", "final", "error"]) {
+  events.addEventListener(type, (message) => {
+    if (!message.data) {
+      return;
+    }
+
+    handleServerEvent(JSON.parse(message.data));
+  });
+}
+
+events.onerror = () => {
+  statusEl.textContent = "event stream disconnected";
+  statusEl.classList.remove("busy");
+};
 
 const GRAPH_NODES = [
   "ingest",

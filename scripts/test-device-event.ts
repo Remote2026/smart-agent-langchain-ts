@@ -4,18 +4,22 @@
  * 用法：
  *   1) 先启动服务：npm run dev
  *   2) 运行：npm run test:device-event
- *      或指定参数：tsx scripts/test-device-event.ts --deviceId xxx --name "门磁" --label "厨房门磁" --type "contactSensor"
+ *      或指定参数：tsx scripts/test-device-event.ts --deviceId xxx --name "灯" --label "厨房灯" --type "switch" --from Off --status On
  */
+import { fileURLToPath } from "node:url";
 
 const baseUrl = process.env.SMART_AGENT_BASE_URL ?? "http://localhost:3000";
 
-function parseArgs(): {
+export type DeviceEventPayload = {
   deviceId: string;
   name: string;
   label?: string;
   type?: string;
-} {
-  const args = process.argv.slice(2);
+  previousStatus?: string;
+  status: string;
+};
+
+export function parseDeviceEventArgs(args: string[]): DeviceEventPayload {
   const get = (flag: string) => {
     const idx = args.indexOf(flag);
     return idx >= 0 && args[idx + 1] ? args[idx + 1] : undefined;
@@ -26,11 +30,13 @@ function parseArgs(): {
     name: get("--name") || "测试门磁传感器",
     label: get("--label"),
     type: get("--type"),
+    previousStatus: get("--previousStatus") || get("--from"),
+    status: get("--status") || "On",
   };
 }
 
 async function main() {
-  const payload = parseArgs();
+  const payload = parseDeviceEventArgs(process.argv.slice(2));
 
   console.log(`[test-device-event] POST ${baseUrl}/api/device-event`);
   console.log(`  payload:`, JSON.stringify(payload, null, 2));
@@ -46,7 +52,9 @@ async function main() {
   console.log(`  response:`, body);
 }
 
-main().catch((err) => {
-  console.error("[test-device-event] failed:", err);
-  process.exitCode = 1;
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error("[test-device-event] failed:", err);
+    process.exitCode = 1;
+  });
+}

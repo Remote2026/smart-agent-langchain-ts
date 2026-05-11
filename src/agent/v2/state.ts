@@ -48,5 +48,7 @@ export const DeviceEventRequestSchema = z.object({
   name: z.string().min(1),
   label: z.string().optional(),
   type: z.string().optional(),
+  previousStatus: z.string().optional(),
+  status: z.string().min(1).optional(),
 });
 export type DeviceEventRequest = z.infer<typeof DeviceEventRequestSchema>;

@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +9,7 @@ import { SmartThingsClient } from "./tools/smartthings.js";
 import type { ChatEventOut } from "./types.js";
 import { ChatRequestSchema, DeviceEventRequestSchema } from "./agent/v2/state.js";
 import { LogManager } from "./logging/index.js";
+import { DEFAULT_SESSION_ID } from "./session.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +53,31 @@ app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
 });
 
+app.get("/api/events", (request, response) => {
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+
+  sseClients.add(response);
+
+  const event = {
+    sessionId: DEFAULT_SESSION_ID,
+    channel: "web",
+    type: "status",
+    payload: { status: "done" }
+  } satisfies ChatEventOut;
+
+  response.write(`event: ${event.type}\n`);
+  response.write(`data: ${JSON.stringify(event)}\n\n`);
+
+  request.on("close", () => {
+    sseClients.delete(response);
+  });
+});
+
 app.post("/api/chat", async (request, response) => {
   /**
    * V2（text-only）请求格式：
@@ -60,7 +85,7 @@ app.post("/api/chat", async (request, response) => {
    */
   const parsedRequest = ChatRequestSchema.safeParse(request.body);
   if (!parsedRequest.success) {
-    const sessionId = crypto.randomUUID();
+    const sessionId = DEFAULT_SESSION_ID;
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
@@ -84,7 +109,7 @@ app.post("/api/chat", async (request, response) => {
   }
 
   const body = parsedRequest.data;
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : crypto.randomUUID();
+  const sessionId = DEFAULT_SESSION_ID;
   const message = body.message;
 
   /**
@@ -158,9 +183,14 @@ app.post("/api/device-event", async (request, response) => {
   }
 
   const ev = parsed.data;
-  const sessionId = `device-${crypto.randomUUID()}`;
+  const sessionId = DEFAULT_SESSION_ID;
   const deviceLabel = ev.label || ev.name;
-  const eventText = `设备事件：${deviceLabel}(${ev.deviceId}) 状态已更新`;
+  const statusText = ev.status
+    ? ev.previousStatus
+      ? `状态从 ${ev.previousStatus} 变为 ${ev.status}`
+      : `当前状态为 ${ev.status}`
+    : "状态已更新";
+  const eventText = `设备事件：${deviceLabel}(${ev.deviceId}) ${statusText}`;
 
   // SSE 广播 emit：写入所有已连接客户端
   const emit = (event: ChatEventOut) => {
