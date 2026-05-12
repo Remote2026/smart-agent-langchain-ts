@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import Database from "better-sqlite3";
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
@@ -104,16 +104,14 @@ export class SmartAgent {
     console.log(`Checkpointer: ${dbPath}`);
   }
 
-  /** 清除 checkpoint 数据库文件 → 重建空库，所有会话历史清空 */
+  /** 清除 checkpoint 中所有会话历史（直接操作 SQLite，避免 Windows 文件锁） */
   clearSession(): void {
-    rmSync(this.graphDeps.dbPath, { force: true });
+    const db = new Database(this.graphDeps.dbPath);
+    db.exec("DELETE FROM checkpoints");
+    db.exec("DELETE FROM checkpoint_blobs");
+    db.exec("DELETE FROM checkpoint_writes");
+    db.close();
     console.log(`[agent] checkpoint cleared: ${this.graphDeps.dbPath}`);
-    this.v2Graph = buildV2Graph({
-      llm: this.graphDeps.llm,
-      tools: this.graphDeps.tools,
-      systemPrompt: this.systemPrompt,
-      checkpointer: SqliteSaver.fromConnString(this.graphDeps.dbPath)
-    });
   }
 
   // channel 参数支持多 transport：Web 传入 "web"，Slack 传入 "slack"（默认 "web" 保持向后兼容）
