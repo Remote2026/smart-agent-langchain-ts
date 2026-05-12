@@ -2,6 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import type { GraphEvent } from "../../types.js";
 
+// discriminated union：Web/Slack/ROS2 等任意 Transport 统一使用此 schema 构造消息
 export const InputMessageSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("text"),
@@ -9,9 +10,9 @@ export const InputMessageSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("image"),
-    imageBase64: z.string().min(1),
-    mimeType: z.string().min(1),
-    text: z.string().optional()
+    imageBase64: z.string().min(1),      // 纯 base64，不含 data:image/... 前缀
+    mimeType: z.string().min(1),         // "image/jpeg" | "image/png" | "image/webp"
+    text: z.string().optional()          // 可选伴随文字，纯图片时不传
   })
 ]);
 
@@ -19,7 +20,7 @@ export type InputMessage = z.infer<typeof InputMessageSchema>;
 
 export const ChatRequestSchema = z.object({
   sessionId: z.string().optional(),
-  // V2 text-only：强制要求 message 存在且为 text
+  // V2：支持 text 与 image 两种消息类型（discriminated union）
   message: InputMessageSchema
 });
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
