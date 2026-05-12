@@ -89,7 +89,7 @@ export class SmartAgent {
       const initialGraphState = {
         sessionId: input.sessionId,
         input: input.message,
-        messages: [new HumanMessage(input.message.text)],
+        messages: [new HumanMessage(input.message.text ?? "")],
         graphEvents: []
       };
 
@@ -173,7 +173,7 @@ export class SmartAgent {
       const initialGraphState = {
         sessionId: input.sessionId,
         input: input.message,
-        messages: [new HumanMessage(input.message.text)],
+        messages: [new HumanMessage(input.message.text ?? "")],
         graphEvents: [],
         eventType: "device_event" as const
       };

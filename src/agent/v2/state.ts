@@ -2,14 +2,18 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import type { GraphEvent } from "../../types.js";
 
-/**
- * V2 (Text-only): message schema
- * - 暂时只支持文本，后续需要图片再扩展为 discriminatedUnion。
- */
-export const InputMessageSchema = z.object({
-  kind: z.literal("text"),
-  text: z.string().min(1)
-});
+export const InputMessageSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("text"),
+    text: z.string().min(1)
+  }),
+  z.object({
+    kind: z.literal("image"),
+    imageBase64: z.string().min(1),
+    mimeType: z.string().min(1),
+    text: z.string().optional()
+  })
+]);
 
 export type InputMessage = z.infer<typeof InputMessageSchema>;
 

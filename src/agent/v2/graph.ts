@@ -79,7 +79,7 @@ async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType
 
   console.debug(state.input.text);
 
-  const trimmed = state.input.text.trim();
+  const trimmed = (state.input.text ?? "").trim();
   if (!trimmed) {
     return {
       userText: "",
