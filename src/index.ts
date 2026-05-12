@@ -7,7 +7,7 @@ import { createTools } from "./tools/index.js";
 import { RosbridgeClient } from "./tools/ros2.js";
 import { SmartThingsClient } from "./tools/smartthings.js";
 import type { ChatEventOut } from "./types.js";
-import { ChatRequestSchema, DeviceEventRequestSchema } from "./agent/v2/state.js";
+import { ChatRequestSchema, DeviceEventRequestSchema, type InputMessage } from "./agent/v2/state.js";
 import { LogManager } from "./logging/index.js";
 import { DEFAULT_SESSION_ID } from "./session.js";
 import { startSlackApp } from "./slack/app.js";
@@ -45,8 +45,8 @@ const agent = new SmartAgent({
 const logManager = new LogManager({ baseDir: path.resolve(process.cwd(), "logs") });
 
 const app = express();
-// 纯文本模式：1MB 足够，并且能避免异常大请求占用内存。
-app.use(express.json({ limit: "1mb" }));
+// 图片 base64 体积比纯文本大，10MB 足够智能家居场景
+app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.resolve(__dirname, "..", "public")));
 
 // SSE 客户端集合：用于设备事件广播到所有已连接的 Web UI
@@ -82,6 +82,16 @@ function maybeMirrorToSlack(event: ChatEventOut, threadTs?: string): void {
   if (event.type === "error") {
     slackNotifier.mirrorWebError(event.payload.message, threadTs);
   }
+}
+
+/** 构造 Web→Slack mirror 文案：
+ *  - kind="text" → "Web: {text}"
+ *  - kind="image" → "Web: [图片] {text}" 或 "Web: [图片]"（无文字时） */
+function webMessageSlackText(msg: InputMessage): string {
+  if (msg.kind === "text") return `Web: ${msg.text}`;
+  return msg.text
+    ? `Web: [图片] ${msg.text}`
+    : `Web: [图片]`;
 }
 
 // -------------------------------------------------
@@ -169,20 +179,9 @@ app.post("/api/chat", async (request, response) => {
     maybeMirrorToSlack(event, mirrorThreadTs); // Web→Slack mirror 旁路
   };
 
-  if (message.kind !== "text") {
-    emit({
-      sessionId,
-      channel: "web",
-      type: "error",
-      payload: { message: "Only text messages are supported for now." }
-    });
-    response.end();
-    return;
-  }
-
   // Web → Slack mirror：先发用户消息到 Slack 默认频道，记录 ts 作为后续 thread 根
   if (slackNotifier) {
-    const ts = await slackNotifier.mirrorWebUserMessage(message.text);
+    const ts = await slackNotifier.mirrorWebUserMessage(webMessageSlackText(message));
     if (ts) mirrorThreadTs = ts;
   }
 
