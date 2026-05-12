@@ -26,6 +26,30 @@ Rules:
 - Explain tool failures in readable language without exposing secrets.`;
 }
 
+/**
+ * 按 InputMessage.kind 分支构造 HumanMessage：
+ *  - kind="text" → 纯文本 HumanMessage
+ *  - kind="image" → 多模态 content 数组（text? + image_url）
+ */
+export function buildHumanMessage(msg: InputMessage): HumanMessage {
+  if (msg.kind === "text") {
+    return new HumanMessage(msg.text);
+  }
+  // kind: "image" — 构造多模态 content 数组（text 在前，image_url 在后）
+  const parts: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [];
+  if (msg.text) {
+    parts.push({ type: "text", text: msg.text });
+  }
+  parts.push({
+    type: "image_url",
+    image_url: { url: `data:${msg.mimeType};base64,${msg.imageBase64}` }
+  });
+  return new HumanMessage({ content: parts });
+}
+
 export class SmartAgent {
   /**
    * LangGraph 编译后的可运行图（Runnable Graph）。
@@ -89,7 +113,7 @@ export class SmartAgent {
       const initialGraphState = {
         sessionId: input.sessionId,
         input: input.message,
-        messages: [new HumanMessage(input.message.text ?? "")], // text 在 image 类型中为 optional
+        messages: [buildHumanMessage(input.message)], // text/image 统一入口
         graphEvents: []
       };
 
@@ -173,7 +197,7 @@ export class SmartAgent {
       const initialGraphState = {
         sessionId: input.sessionId,
         input: input.message,
-        messages: [new HumanMessage(input.message.text ?? "")], // text 在 image 类型中为 optional
+        messages: [buildHumanMessage(input.message)], // 设备事件始终为 kind:"text"，走纯文本分支
         graphEvents: [],
         eventType: "device_event" as const
       };
