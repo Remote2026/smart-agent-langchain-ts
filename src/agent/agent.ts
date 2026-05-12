@@ -108,8 +108,7 @@ export class SmartAgent {
   clearSession(): void {
     const db = new Database(this.graphDeps.dbPath);
     db.exec("DELETE FROM checkpoints");
-    db.exec("DELETE FROM checkpoint_blobs");
-    db.exec("DELETE FROM checkpoint_writes");
+    db.exec("DELETE FROM writes");
     db.close();
     console.log(`[agent] checkpoint cleared: ${this.graphDeps.dbPath}`);
   }
