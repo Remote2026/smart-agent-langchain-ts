@@ -32,6 +32,17 @@ Rules:
  *  - kind="text" → 纯文本 HumanMessage
  *  - kind="image" → 多模态 content 数组（text? + image_url）
  */
+/** 日志用：截断 base64，避免刷屏 */
+function summarizeInput(msg: InputMessage): unknown {
+  if (msg.kind === "text") return msg;
+  return {
+    kind: msg.kind,
+    mimeType: msg.mimeType,
+    base64Len: msg.imageBase64.length,
+    text: msg.text,
+  };
+}
+
 export function buildHumanMessage(msg: InputMessage): HumanMessage {
   if (msg.kind === "text") {
     return new HumanMessage(msg.text);
@@ -119,7 +130,7 @@ export class SmartAgent {
       };
 
       console.log(`[agent] handleUserMessage - graph start`, {
-        input: initialGraphState.input,
+        input: summarizeInput(initialGraphState.input),
         msgLen: initialGraphState.messages.length
       });
 
