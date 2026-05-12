@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
@@ -63,13 +64,14 @@ export function buildHumanMessage(msg: InputMessage): HumanMessage {
 }
 
 export class SmartAgent {
-  /**
-   * LangGraph 编译后的可运行图（Runnable Graph）。
-   * - 通过 SqliteSaver checkpoint 自动持久化会话（messages 历史）
-   * - stream(): 以"状态快照"的方式流式产出每一步的 state（便于做 SSE）
-   */
-  private readonly v2Graph: ReturnType<typeof buildV2Graph>;
+  private v2Graph: ReturnType<typeof buildV2Graph>;
   private readonly systemPrompt: string;
+  // 保存构造参数，clearSession() 重建图时需要
+  private readonly graphDeps: {
+    llm: ChatOpenAI;
+    tools: StructuredToolInterface[];
+    dbPath: string;
+  };
 
   constructor(options: {
     baseURL: string;
@@ -90,15 +92,27 @@ export class SmartAgent {
     this.systemPrompt = createSystemPrompt();
     console.log("SmartAgent initialized with system prompt:", this.systemPrompt);
 
-    // SqliteSaver：嵌入式 SQLite，数据存本地 .db 文件，无需服务端
-    const checkpointer = SqliteSaver.fromConnString(options.dbPath ?? "checkpoints.db");
-    console.log(`Checkpointer: ${options.dbPath ?? "checkpoints.db"}`);
+    const dbPath = options.dbPath ?? "checkpoints.db";
+    this.graphDeps = { llm: model, tools: options.tools, dbPath };
 
     this.v2Graph = buildV2Graph({
       llm: model,
       tools: options.tools,
       systemPrompt: this.systemPrompt,
-      checkpointer
+      checkpointer: SqliteSaver.fromConnString(dbPath)
+    });
+    console.log(`Checkpointer: ${dbPath}`);
+  }
+
+  /** 清除 checkpoint 数据库文件 → 重建空库，所有会话历史清空 */
+  clearSession(): void {
+    rmSync(this.graphDeps.dbPath, { force: true });
+    console.log(`[agent] checkpoint cleared: ${this.graphDeps.dbPath}`);
+    this.v2Graph = buildV2Graph({
+      llm: this.graphDeps.llm,
+      tools: this.graphDeps.tools,
+      systemPrompt: this.systemPrompt,
+      checkpointer: SqliteSaver.fromConnString(this.graphDeps.dbPath)
     });
   }
 

@@ -102,6 +102,12 @@ app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
 });
 
+// 一键清除会话历史（删除 checkpoints.db → 重建空库）
+app.post("/api/session/clear", (_request, response) => {
+  agent.clearSession();
+  response.json({ ok: true });
+});
+
 app.get("/api/events", (request, response) => {
   response.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",

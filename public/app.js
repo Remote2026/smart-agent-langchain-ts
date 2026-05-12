@@ -311,3 +311,22 @@ function applyNodeEvent(payload) {
     graphStepsEl.append(row);
   }
 }
+
+/* ---- 清除会话历史 ---- */
+const clearSessionBtn = document.getElementById("clearSessionBtn");
+clearSessionBtn?.addEventListener("click", async () => {
+  if (!confirm("确认清除所有会话历史？")) return;
+  try {
+    const res = await fetch("/api/session/clear", { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // 清空 UI
+    messagesEl.innerHTML = "";
+    toolEventsEl.innerHTML = '<div class="empty">暂无工具调用</div>';
+    resetGraphSteps();
+    statusEl.textContent = "会话已清除";
+    console.log("[ui] session cleared");
+  } catch (err) {
+    console.error("[ui] clear session failed:", err);
+    statusEl.textContent = "清除失败";
+  }
+});

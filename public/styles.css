@@ -311,6 +311,24 @@ dl {
   font-size: 13px;
 }
 
+.clear-session-btn {
+  margin-top: 12px;
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid rgba(226, 93, 93, 0.5);
+  border-radius: 7px;
+  background: rgba(226, 93, 93, 0.1);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.2s, color 0.2s;
+}
+.clear-session-btn:hover {
+  background: rgba(226, 93, 93, 0.25);
+  color: var(--danger);
+}
+
 dt {
   color: var(--muted);
 }
