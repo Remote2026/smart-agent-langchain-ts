@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:chat": "tsx scripts/test-chat.ts",
-    "test:device-event": "tsx scripts/test-device-event.ts"
+    "test:device-event": "tsx scripts/test-device-event.ts",
+    "test:image": "tsx scripts/test-image.ts"
   },
   "dependencies": {
     "@langchain/core": "^0.3.79",
