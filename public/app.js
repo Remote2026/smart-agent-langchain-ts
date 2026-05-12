@@ -6,6 +6,12 @@ const inputEl = document.querySelector("#messageInput");
 const sendButtonEl = document.querySelector("#sendButton");
 const statusEl = document.querySelector("#status");
 
+/* ---- 图片选择器 ---- */
+const imageInput = document.getElementById("imageInput");
+const imagePreview = document.getElementById("imagePreview");
+const previewThumb = document.getElementById("previewThumb");
+const removeImageBtn = document.getElementById("removeImage");
+
 const sessionId = "web-default-session";
 localStorage.setItem("smart-agent-session", sessionId);
 
@@ -37,28 +43,101 @@ const GRAPH_NODES = [
 ];
 const graphStepState = new Map();
 
+/** File → 纯 base64 字符串（不含 data:image/... 前缀） */
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = /** @type {string} */ (reader.result);
+      resolve(result.split(",")[1]); // 去掉 "data:image/png;base64," 前缀
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 隐藏图片预览条 */
+function hideImagePreview() {
+  imagePreview.hidden = true;
+  previewThumb.src = "";
+}
+
+// 文件选择 → 显示缩略图预览
+imageInput.addEventListener("change", () => {
+  const file = imageInput.files[0];
+  if (!file) {
+    hideImagePreview();
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    previewThumb.src = /** @type {string} */ (reader.result);
+    imagePreview.hidden = false;
+  };
+  reader.readAsDataURL(file);
+});
+
+// 取消已选图片
+removeImageBtn.addEventListener("click", () => {
+  imageInput.value = "";
+  hideImagePreview();
+});
+
+// 粘贴图片支持（Ctrl+V）→ 触发图片选择流程
+document.addEventListener("paste", (event) => {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        imageInput.files = dt.files;
+        imageInput.dispatchEvent(new Event("change"));
+      }
+      break;
+    }
+  }
+});
+
 formEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = inputEl.value.trim();
-  if (!text) {
-    return;
-  }
+  const file = imageInput.files[0];
 
-  // UI -> HTTP 数据流（text-only）
-  appendMessage("user", "User", text);
+  if (!text && !file) return;
+
+  // 构造消息体：有图片 → kind:"image"，无图片 → kind:"text"
+  const body = {
+    sessionId,
+    message: file
+      ? {
+          kind: "image",
+          imageBase64: await toBase64(file),
+          mimeType: file.type || "image/jpeg",
+          ...(text ? { text } : {})
+        }
+      : { kind: "text", text }
+  };
+
+  // UI 显示文本（图片用占位符）
+  const displayText = file
+    ? (text ? `[图片] ${text}` : "[图片]")
+    : text;
+  appendMessage("user", "User", displayText);
+
   inputEl.value = "";
   resizeInput();
+  imageInput.value = "";
+  hideImagePreview();
   setBusy(true);
   resetGraphSteps();
 
   try {
-    const body = { sessionId, message: { kind: "text", text } };
-
     const response = await fetch("/api/chat", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
 
