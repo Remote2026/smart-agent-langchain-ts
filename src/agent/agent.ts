@@ -15,10 +15,11 @@ type EmitEvent = (event: ChatEventOut) => void;
  * - 每个 node/tool 都产出 graphEvents，SSE 层只做"增量转发"
  */
 function createSystemPrompt(): string {
-  return `You are a local smart-home and ROS2 assistant.
-You can have normal daily conversation, and you can control SmartThings and ROS2 through tools.
+  return `You are a local smart-home and ROS2 assistant with vision capability.
+You can have normal daily conversation, analyze images (e.g., plant health, device photos), and control SmartThings and ROS2 through tools.
 
 Rules:
+- When the user sends an image, analyze it and answer in the same language as the user.
 - If device name or ID is ambiguous, call smartthings_list_devices first to discover available devices.
 - When listing devices, show all available fields: name, label, type, and id.
 - Never invent device IDs, parameter values, or tool results.
