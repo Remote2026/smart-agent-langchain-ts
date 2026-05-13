@@ -19,14 +19,14 @@ describe("graphEventToSse", () => {
 
   describe("node events", () => {
     it("maps GraphEvent type=node to ChatEventOut type=node", () => {
-      const ev: GraphEvent = nodeEvent({ node: "router_intent", phase: "end", summary: "intent=smartthings" });
+      const ev: GraphEvent = nodeEvent({ node: "configure_agent", phase: "end", summary: "context ready" });
       const result = graphEventToSse(sessionId, ev, "slack");
 
       expect(result.type).toBe("node");
       expect(result.channel).toBe("slack");
-      expect((result as any).payload.node).toBe("router_intent");
+      expect((result as any).payload.node).toBe("configure_agent");
       expect((result as any).payload.phase).toBe("end");
-      expect((result as any).payload.summary).toBe("intent=smartthings");
+      expect((result as any).payload.summary).toBe("context ready");
     });
   });
 

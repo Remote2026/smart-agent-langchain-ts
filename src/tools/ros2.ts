@@ -1,3 +1,7 @@
+import { createLogger } from "../utils/logger.js";
+
+const log = createLogger("ros2.ts");
+
 type RosbridgeCallServiceMessage = {
   op: "call_service";
   service: string;
@@ -43,7 +47,7 @@ export class RosbridgeClient {
   }
 
   async driveRobotCloseFridgeDoor(): Promise<{ ok: true }> {
-    console.log("ros2_drive_robot_close_fridge_door triggered (TODO: implement ROS2 action)");
+    log.info("driveRobotCloseFridgeDoor", "triggered (TODO: implement ROS2 action)");
     return { ok: true };
   }
 

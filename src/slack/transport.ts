@@ -12,6 +12,9 @@ import type { ChatEventOut } from "../types.js";
 import type { SmartAgent } from "../agent/agent.js";
 import { DEFAULT_SESSION_ID } from "../session.js";
 import type { InputMessage } from "../agent/v2/state.js";
+import { createLogger } from "../utils/logger.js";
+
+const log = createLogger("slack/transport.ts");
 
 export function createSlackTransport(options: {
   agent: SmartAgent;
@@ -29,16 +32,16 @@ export function createSlackTransport(options: {
     bot_id?: string;
     subtype?: string;
   }) {
-    console.log("[slack:transport] handleAppMention:", { bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 80) });
+    log.info("handleAppMention", { bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 80) });
     // 防回环第2层：过滤 bot 自己发出的消息和非普通消息 subtype
-    if (event.bot_id) { console.log("[slack:transport] skipped: bot_id"); return; }
+    if (event.bot_id) { log.info("handleAppMention", "skipped: bot_id"); return; }
 
     // Slack @mention 带图片：下载文件 → base64 → 构造 kind:"image" InputMessage
     if ((event as any).files?.length > 0) {
       const file = (event as any).files[0];
       const mimeType = file.mimetype || "image/jpeg";
       if (!mimeType.startsWith("image/")) {
-        console.log("[slack:transport] app_mention file_share skipped: non-image");
+        log.info("handleAppMention", "file_share skipped: non-image");
         return;
       }
       const token = process.env.SLACK_BOT_TOKEN;
@@ -46,7 +49,7 @@ export function createSlackTransport(options: {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!response.ok) {
-        console.error("[slack:transport] file download failed:", response.status);
+        log.error("handleAppMention", "file download failed:", response.status);
         return;
       }
       const arrayBuffer = await response.arrayBuffer();
@@ -55,7 +58,7 @@ export function createSlackTransport(options: {
       const text = event.text.replace(/<@\w+>/g, "").trim() || undefined;
       const threadTs = event.thread_ts ?? event.ts;
 
-      console.log("[slack:transport] processing app_mention file_share -> agent");
+      log.info("handleAppMention", "processing file_share -> agent");
       await processMessage(
         text ?? "",
         event.channel,
@@ -65,13 +68,13 @@ export function createSlackTransport(options: {
       return;
     }
 
-    if (event.subtype) { console.log("[slack:transport] skipped: subtype"); return; }
+    if (event.subtype) { log.info("handleAppMention", "skipped: subtype"); return; }
 
     const threadTs = event.thread_ts ?? event.ts;
     const text = event.text.replace(/<@\w+>/g, "").trim();
-    if (!text) { console.log("[slack:transport] skipped: empty text after stripping mention"); return; }
+    if (!text) { log.info("handleAppMention", "skipped: empty text after stripping mention"); return; }
 
-    console.log("[slack:transport] processing app_mention -> agent");
+    log.info("handleAppMention", "processing -> agent");
     await processMessage(text, event.channel, threadTs);
   }
 
@@ -83,11 +86,11 @@ export function createSlackTransport(options: {
     bot_id?: string;
     subtype?: string;
   }) {
-    console.log("[slack:transport] handleDirectMessage:", { bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 80) });
-    if (event.bot_id) { console.log("[slack:transport] skipped: bot_id"); return; }
+    log.info("handleDirectMessage", { bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 80) });
+    if (event.bot_id) { log.info("handleDirectMessage", "skipped: bot_id"); return; }
     // file_share 是唯一放行的 subtype（图片消息），其他 subtype 全部过滤
     if (event.subtype && event.subtype !== "file_share") {
-      console.log("[slack:transport] skipped: subtype=", event.subtype);
+      log.info("handleDirectMessage", "skipped: subtype=", event.subtype);
       return;
     }
 
@@ -97,7 +100,7 @@ export function createSlackTransport(options: {
       const mimeType = file.mimetype || "image/jpeg";
       // 只处理图片，忽略其他文件类型
       if (!mimeType.startsWith("image/")) {
-        console.log("[slack:transport] file_share skipped: non-image", mimeType);
+        log.info("handleDirectMessage", "file_share skipped: non-image", mimeType);
         return;
       }
       const token = process.env.SLACK_BOT_TOKEN;
@@ -105,7 +108,7 @@ export function createSlackTransport(options: {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!response.ok) {
-        console.error("[slack:transport] file download failed:", response.status);
+        log.error("handleDirectMessage", "file download failed:", response.status);
         return;
       }
       const arrayBuffer = await response.arrayBuffer();
@@ -113,7 +116,7 @@ export function createSlackTransport(options: {
       const text = (event.text || "").trim() || undefined;
       const threadTs = (event as any).thread_ts ?? event.ts;
 
-      console.log("[slack:transport] processing file_share -> agent");
+      log.info("handleDirectMessage", "processing file_share -> agent");
       await processMessage(
         text ?? "",
         event.channel,
@@ -125,14 +128,14 @@ export function createSlackTransport(options: {
 
     // 有文件但不是 file_share subtype（正常情况下不该发生），跳过
     if ((event as any).files?.length > 0 && event.subtype !== "file_share") {
-      console.log("[slack:transport] files present but not file_share, skipping");
+      log.info("handleDirectMessage", "files present but not file_share, skipping");
       return;
     }
 
-    if (!event.text?.trim()) { console.log("[slack:transport] skipped: empty text"); return; }
+    if (!event.text?.trim()) { log.info("handleDirectMessage", "skipped: empty text"); return; }
 
     const threadTs = event.thread_ts ?? event.ts;
-    console.log("[slack:transport] processing DM -> agent");
+    log.info("handleDirectMessage", "processing DM -> agent");
     await processMessage(event.text.trim(), event.channel, threadTs);
   }
 
@@ -153,7 +156,7 @@ export function createSlackTransport(options: {
           channel: slackChannel,
           text: event.payload.text,
           thread_ts: threadTs
-        }).catch(err => console.error("[slack:transport] final reply failed:", err));
+        }).catch(err => log.error("processMessage", "final reply failed:", err));
       }
 
       if (event.type === "error") {
@@ -161,12 +164,12 @@ export function createSlackTransport(options: {
           channel: slackChannel,
           text: `处理失败：${event.payload.message}`,
           thread_ts: threadTs
-        }).catch(err => console.error("[slack:transport] error reply failed:", err));
+        }).catch(err => log.error("processMessage", "error reply failed:", err));
       }
     };
 
     try {
-      console.log("[slack:transport] calling agent.handleUserMessage...");
+      log.info("processMessage", "calling agent.handleUserMessage...");
       const message: InputMessage = overrideMessage ?? { kind: "text", text };
       await agent.handleUserMessage({
         sessionId: DEFAULT_SESSION_ID,
@@ -174,9 +177,9 @@ export function createSlackTransport(options: {
         emit,
         channel: "slack"
       });
-      console.log("[slack:transport] agent.handleUserMessage done");
+      log.info("processMessage", "agent.handleUserMessage done");
     } catch (err) {
-      console.error("[slack:transport] Agent execution failed:", err);
+      log.error("processMessage", "Agent execution failed:", err);
     }
   }
 

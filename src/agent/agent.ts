@@ -7,6 +7,9 @@ import type { Channel, ChatEventOut, GraphEvent } from "../types.js";
 import type { InputMessage } from "./v2/state.js";
 import { graphEventToSse } from "./v2/events.js";
 import { buildV2Graph } from "./v2/graph.js";
+import { createLogger } from "../utils/logger.js";
+
+const log = createLogger("agent.ts");
 
 type EmitEvent = (event: ChatEventOut) => void;
 
@@ -90,7 +93,7 @@ export class SmartAgent {
     });
 
     this.systemPrompt = createSystemPrompt();
-    console.log("SmartAgent initialized with system prompt:", this.systemPrompt);
+    log.info("constructor", "SmartAgent initialized");
 
     const dbPath = options.dbPath ?? "checkpoints.db";
     this.graphDeps = { llm: model, tools: options.tools, dbPath };
@@ -101,7 +104,7 @@ export class SmartAgent {
       systemPrompt: this.systemPrompt,
       checkpointer: SqliteSaver.fromConnString(dbPath)
     });
-    console.log(`Checkpointer: ${dbPath}`);
+    log.info("constructor", "Checkpointer:", dbPath);
   }
 
   /** 清除 checkpoint 中所有会话历史（直接操作 SQLite，避免 Windows 文件锁） */
@@ -110,7 +113,7 @@ export class SmartAgent {
     db.exec("DELETE FROM checkpoints");
     db.exec("DELETE FROM writes");
     db.close();
-    console.log(`[agent] checkpoint cleared: ${this.graphDeps.dbPath}`);
+    log.info("clearSession", "checkpoint cleared:", this.graphDeps.dbPath);
   }
 
   // channel 参数支持多 transport：Web 传入 "web"，Slack 传入 "slack"（默认 "web" 保持向后兼容）
@@ -140,7 +143,7 @@ export class SmartAgent {
         graphEvents: []
       };
 
-      console.log(`[agent] handleUserMessage - graph start`, {
+      log.info("handleUserMessage", "graph start", {
         input: summarizeInput(initialGraphState.input),
         msgLen: initialGraphState.messages.length
       });
@@ -164,10 +167,8 @@ export class SmartAgent {
         lastStateMessages = Array.isArray(v2State.messages) ? (v2State.messages as BaseMessage[]) : lastStateMessages;
         lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
 
-        console.log(`[agent] handleUserMessage - graph state`, {
-          lastStateMessages,
-          lastFinalText
-        });
+        const lastMsg = lastStateMessages?.[lastStateMessages.length - 1];
+        log.info("handleUserMessage", "graph state", { lastMsg, lastFinalText });
 
         // delta 切片：只取本轮新增的 graphEvents
         const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
@@ -221,8 +222,7 @@ export class SmartAgent {
         sessionId: input.sessionId,
         input: input.message,
         messages: [buildHumanMessage(input.message)], // 设备事件始终为 kind:"text"，走纯文本分支
-        graphEvents: [],
-        eventType: "device_event" as const
+        graphEvents: []
       };
 
       const stream = await this.v2Graph.stream(

@@ -1,134 +1,116 @@
-# Smart Agent (LangGraph + TypeScript) — V2.1 ToolNode 多轮 Agent 设计
+# Smart Agent (LangGraph + TypeScript) — V2.2 简化图结构
 
-Date: 2026-05-08
+Date: 2026-05-14 (supersedes V2.1 2026-05-08)
 Project directory: `smart-agent-langchain-ts`
 
 ## 1. 背景与动机
 
-V2（2026-05-03 设计）使用自定义 StateGraph，每个领域（smartthings / ros2 / default）对应一个硬编码节点。LLM 只做"动作分类"（输出结构化 JSON），代码手动查找和调用 tool。
+V2.1（2026-05-08）使用 7 节点 StateGraph：`START → ingest/device_ingest → router_intent → prepare → llm_call ⇄ tool_node → respond`。其中 `router_intent` 通过额外一次 LLM 调用分类意图，`prepare` 按意图筛选 tool 子集。
 
 问题：
-- 领域节点样板代码多（每个节点重复 LLM 调用 → JSON 解析 → tool 查找 → 手动 invoke 流程）
-- 多步 tool 顺序依赖（如 resolve_alias → set_switch）需要代码硬编码，不够灵活
-- 新增领域需要写新节点 + 注册到图结构
+- `router_intent` 是一次额外的 LLM 调用，增加延迟和 token 消耗
+- 当前 tool 仅 8 个（5 smartthings + 2 ros2 + 1 通用），LLM bindTools 自带 function schema，模型能自行区分
+- `ingest` / `device_ingest` / `prepare` 三个轻量节点职责分散，可合并
 
-V2.1 用 **LangGraph ToolNode + 多轮 Agent 循环** 替代领域专属节点，LLM 自主决定调用哪些 tool 及调用顺序。
+V2.2 移除 `router_intent`、合并入口节点，简化为 **4 节点** 固定图。
 
 ## 2. 图结构
 
 ```
-ingest → router_intent → prepare_agent → llm_call ⇄ tool_node → respond → END
+START → prepare → llm_call ⇄ tool_node → respond → END
                                 ↑________________________↓
                                    (有 tool_calls 就循环)
 ```
 
-5 个节点 + 1 个条件循环，固定不变。领域差异仅体现在 prepare_agent 选择的 tool 子集。
+4 个节点 + 1 个条件循环。`prepare` 是统一入口（代替原来的 ingest/device_ingest/router_intent/prepare）。
 
 ## 3. 节点职责
 
-### 3.1 ingest（保持不变）
-- 校验 input.text 非空
-- 提取 userText（trim 后文本）
-- 空文本直接走 default + low confidence
+### 3.1 prepare（入口节点）
+
+- 注入 SystemMessage（跨轮去重：checkpoint 恢复的 messages 可能已含 SystemMessage）
+- 重置 `agentLoopCount` 为 0
 - 发送 node:start/end 事件
 
-### 3.2 router_intent（保持不变）
-- 根据 userText 分类意图：smartthings / ros2 / default
-- 输出 intent + confidence + reason
-- 低置信度 → intent=default，由 LLM 在后续对话中自然追问
-- 发送 node:start/end 事件
+不再按 intent 筛选 tool 子集 — 始终使用全部 tools。
 
-### 3.3 prepare_agent（新增）
-- 根据 intent 选择 tool 子集
-- 将 tools bind 到 LLM（`llm.bindTools(tools)`）
-- 将 system prompt 注入 messages（首条 SystemMessage）
-- 发送 node:start/end 事件
+### 3.2 llm_call（不变）
 
-Tool 子集映射：
-
-| intent | tools |
-|--------|-------|
-| smartthings | smartthings_resolve_alias, smartthings_list_devices, smartthings_set_switch, smartthings_set_level |
-| ros2 | ros2_get_param, ros2_set_param |
-| default | 全部 tools |
-
-### 3.4 llm_call（新增）
-- 使用 bindTools 后的 LLM 处理 messages
+- 使用 `bindTools(deps.tools)` 的 LLM 处理 messages（全部 tools，不筛选）
 - 返回 AIMessage（可能含 tool_calls，也可能是最终文本回复）
 - 发送 node:start/end 事件，source="llm"
 
-### 3.5 tool_node（新增）
+### 3.3 tool_node（不变）
+
 - 封装 LangGraph ToolNode，执行 AIMessage 中的 tool_calls
 - 每个 tool call 前后发送 tool:start / tool:end 事件
-- 返回 ToolMessage[] 追加到 messages
+- 返回 ToolMessage[] 追加到 messages，追加到 toolResults
 
-### 3.6 respond（简化）
-- 从 messages 中找到最后一条 AIMessage，提取其 content 作为 finalText
-- 注意：agent 循环结束后，最后一条消息就是 LLM 的最终文本回复（不含 tool_calls）
+### 3.4 respond（不变）
+
+- 从 messages 中逆序找最后一条不含 tool_calls 的 AIMessage 作为 finalText
 - 发送 node:start/end 事件
 
 ## 4. 条件边
 
 ```
+prepare → llm_call (固定)
+
 llm_call 之后：
   - 最后一条消息是 AIMessage 且有 tool_calls → tool_node
   - 否则 → respond
 
 tool_node 之后：
-  - 循环计数 < 5 → llm_call（继续 agent 循环）
-  - 循环计数 >= 5 → respond（强制退出，避免无限循环）
+  - agentLoopCount < 5 → llm_call（继续 agent 循环）
+  - agentLoopCount >= 5 → respond（强制退出，避免无限循环）
+
+respond → END
 ```
 
 ## 5. 状态模型
 
-V2 的 GraphState 保持不变（sessionId / input / messages / userText / intent / intentConfidence / intentReason / toolResults / finalText / graphEvents）。
+```
+sessionId       string          — 会话 ID (replace)
+input           InputMessage    — 本轮输入 (replace)
+messages        BaseMessage[]   — 会话历史 (append, max 50)
+toolResults     unknown          — tool 调用结果数组 (replace)
+finalText       string           — 最终回复文本 (replace)
+graphEvents     GraphEvent[]     — 本轮事件 (replace)
+agentLoopCount  number           — agent 循环计数器 (replace)
+```
 
-新增字段：
-- `agentLoopCount: number` — agent 循环计数器（replace reducer），用于限制最大循环次数
-
-保留字段说明：
-- `toolResults` — 存储 agent 循环中所有 tool 调用的结果数组（按调用顺序追加），供调试/审计。每轮对话开始时清空。
-- `messages` — append reducer，ToolMessage 和 AIMessage 自动累积，LLM 下一轮自然看到历史。
+已移除的字段（V2.1 → V2.2）：
+- `eventType` — 不再需要 chat/device_event 分流
+- `userText` — 仅 router_intent 消费，已移除
+- `intent` — 仅 tool 筛选消费，已移除
 
 ## 6. 事件协议
 
-事件类型不增加，仍为 GraphEvent (node | tool)。变化点：
+不变。GraphEvent 仍为 node | tool，SSE 事件形状不变，前端无需改动。
 
-- `llm_call` 节点的 node 事件标记 `source: "llm"`
-- `tool_node` 发出的 tool 事件标记 `source: "tool"`
-- tool 事件的 origin 标记产生位置（如 `{ file: "graph.ts", fn: "tool_node" }`）
+## 7. 与 V2.1 的差异总结
 
-前端无需改动——SSE 事件形状不变。
-
-## 7. 与 V2 的差异总结
-
-| | V2 | V2.1 |
+| | V2.1 | V2.2 |
 |---|---|---|
-| 领域节点 | 3 个硬编码节点 | 0 个（统一 agent 循环） |
-| 图节点总数 | 6 | 6 |
-| LLM 调用方式 | 人工 prompt 做动作分类 | bindTools 标准 tool calling |
-| Tool 调用 | 代码手动 find + invoke | ToolNode 自动执行 |
-| 多步依赖 | 代码硬编码顺序 | LLM 自主多轮决策 |
-| 新增领域成本 | 写新节点 + 注册边 | 注册 tools + 更新 router prompt |
-| 循环安全 | 无（线性流程） | 最大 5 轮 |
+| 图节点数 | 7 | 4 |
+| START 分支 | 条件边 (eventType) | 固定边 |
+| 意图分类 | LLM router_intent 节点 | 无（LLM 自主根据 tool schema 选择） |
+| Tool 选择 | selectTools(intent) 筛选子集 | 始终全部 tools |
+| 入口节点 | ingest + device_ingest + prepare | prepare（统一入口） |
+| LLM 调用次数 | 1 (router) + N (agent loop) | N (agent loop) |
+| State 字段 | 11 | 8 |
 
-## 8. SmartThings 工具实现方式
+## 8. 风险与约束
 
-- `smartthings_list_devices`：通过 CLI `smartthings devices -j` 获取设备列表，无需 PAT
-- `smartthings_set_switch` / `smartthings_set_level`：暂为空实现，后续通过 CLI `smartthings devices:commands` 补充
-- CLI 认证由用户事先执行 `smartthings login` 完成，代码不处理 token
+- Tool 数量增长到 20+ 时，可能需要重新评估 intent 筛选（减少 bindTools schema token 消耗）
+- 当前 8 个 tool，全部 bind 的 schema token 在可接受范围内
+- 循环安全：最大 5 轮硬限制不变
+- 向后兼容：GraphEvent 协议不变，SSE 事件形状不变，agent.ts API 不变
 
-## 9. 风险与约束
+## 9. Done Criteria
 
-- **LLM tool calling 可靠性**：依赖模型 tool calling 能力，需选择支持 function calling 的模型
-- **循环退出保证**：最大 5 轮硬限制，避免无限循环耗 token
-- **Tool 副作用安全**：tool 层面已有参数校验（deviceId 非空、level 范围），保持不变
-- **向后兼容**：GraphEvent 协议不变，前端无需改动
-
-## 10. Done Criteria
-
-- 图结构改为 5 节点 + 条件循环，不再有 smartthings_node / ros2_node / default_node
-- LLM 使用 bindTools + ToolNode 自主调用 tools
-- 多步依赖（resolve_alias → set_switch）能自然完成，无需代码硬编码顺序
+- 图结构 4 节点 + 条件循环，无 router_intent / ingest / device_ingest
+- prepare 作为统一入口
+- LLM 使用全部 tools（不按 intent 筛选）
 - 最大 5 轮循环后强制终止
-- SSE 事件（node/tool）正常推送，前端展示不受影响
+- 现有测试通过，SSE 事件正常推送

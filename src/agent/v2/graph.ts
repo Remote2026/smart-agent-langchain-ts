@@ -1,13 +1,15 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { AIMessage, HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ChatOpenAI } from "@langchain/openai";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import type { GraphEvent } from "../../types.js";
 import type { InputMessage } from "./state.js";
 import { nodeEvent, toolEvent } from "./events.js";
-import { z } from "zod";
+import { createLogger } from "../../utils/logger.js";
+
+const log = createLogger("graph.ts");
 
 type Deps = {
   llm: ChatOpenAI;
@@ -17,13 +19,12 @@ type Deps = {
 };
 
 // ── 扁平化 GraphState ──────────────────────────────────────────────────
-// 数据流: ingest → router_intent → configure_agent → llm_call ⇄ tool_node → respond
+// 数据流: START → prepare → llm_call ⇄ tool_node → respond → END
 // llm_call 与 tool_node 之间构成 agent 循环（最多 5 轮），LLM 自主决定调用哪些 tool
 const MAX_HISTORY = 50;
 
 const GraphState = Annotation.Root({
   sessionId: Annotation<string>({ reducer: (_, n) => n, default: () => "" }),
-  eventType: Annotation<"chat" | "device_event">({ reducer: (_, n) => n, default: () => "chat" }),
   input: Annotation<InputMessage>({ reducer: (_, n) => n, default: () => ({ kind: "text", text: "" }) }),
   messages: Annotation<BaseMessage[]>({
     reducer: (prev, next) => {
@@ -40,8 +41,6 @@ const GraphState = Annotation.Root({
     },
     default: () => []
   }),
-  userText: Annotation<string | undefined>({ reducer: (_, n) => n }),
-  intent: Annotation<"smartthings" | "ros2" | "default" | undefined>({ reducer: (_, n) => n }),
   toolResults: Annotation<unknown>({ reducer: (_, n) => n }),
   finalText: Annotation<string | undefined>({ reducer: (_, n) => n }),
   graphEvents: Annotation<GraphEvent[]>({ reducer: (_, n) => n, default: () => [] }),
@@ -53,143 +52,28 @@ type GraphStateType = typeof GraphState.State;
 // ── 事件工具 ────────────────────────────────────────────────────────────
 function addEvent(events: GraphEvent[], ev: GraphEvent) {
   events.push(ev);
-  console.log(`GraphEvent: ${ev.type === "node" ? `[${ev.node}]` : `[tool:${ev.name}]`} ${ev.phase} - ${ev.summary}`);
+  log.info("addEvent", `${ev.type === "node" ? `[${ev.node}]` : `[tool:${ev.name}]`} ${ev.phase} - ${ev.summary}`);
 }
 
-// ── 工具选择 ────────────────────────────────────────────────────────────
-// 按意图隔离 tool 子集，避免 smartthings 请求误调到 ros2 tool（安全 + 省 token）
+// ── 节点：prepare ─────────────────────────────────────────────────
+// 统一入口节点：注入 SystemMessage + 重置循环计数器。
+// SystemMessage 只写一次（checkpoint 持久化后跨轮复用）
 
-function selectTools(intent: string | undefined, allTools: StructuredToolInterface[]): StructuredToolInterface[] {
-  switch (intent) {
-    case "smartthings":
-      return allTools.filter(t => t.name.startsWith("smartthings_"));
-    case "ros2":
-      return allTools.filter(t => t.name.startsWith("ros2_"));
-    default:
-      return allTools;
-  }
-}
-
-// ── 节点：ingest ────────────────────────────────────────────────────────
-// 校验输入文本，产出 userText。空文本直接短路到 default，跳过 router
-
-async function ingestNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
+async function prepareNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
   const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "ingest", phase: "start", summary: "validating text input" }));
-
-  console.debug(state.input.text);
-
-  const trimmed = (state.input.text ?? "").trim(); // text 在 image 类型中为 optional
-  if (!trimmed) {
-    return {
-      userText: "",
-      intent: "default",
-      toolResults: undefined,
-      finalText: undefined,
-      graphEvents: [...state.graphEvents, ...events]
-    };
-  }
-
-  addEvent(events, nodeEvent({ node: "ingest", phase: "end", summary: `ok len=${trimmed.length}` }));
-  return {
-    userText: trimmed,
-    intent: undefined,
-    toolResults: undefined,
-    finalText: undefined,
-    graphEvents: [...state.graphEvents, ...events]
-  };
-}
-
-// ── 节点：device_ingest ────────────────────────────────────────────
-// 设备事件入口：构造事件消息，设置 intent=ros2（跳过 router），直接进 configure_agent
-
-async function deviceIngestNode(state: GraphStateType): Promise<Partial<GraphStateType>> {
-  const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "device_ingest", phase: "start", summary: "device event received" }));
-
-  const userText = state.input.text;
-  addEvent(events, nodeEvent({ node: "device_ingest", phase: "end", summary: "intent=ros2" }));
-
-  return {
-    userText,
-    intent: "ros2",
-    finalText: undefined,
-    graphEvents: [...state.graphEvents, ...events]
-  };
-}
-
-// ── 节点：router_intent ─────────────────────────────────────────────────
-// 用最近 3 条历史 + 当前 userText 让 LLM 分类意图。低置信度自动降级到 default
-
-async function routeIntentNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
-  const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "router_intent", phase: "start", summary: "classifying intent" }));
-
-  const userText = state.userText ?? "";
-  if (!userText) {
-    addEvent(events, nodeEvent({ node: "router_intent", phase: "end", summary: "intent=default (missing userText)" }));
-    return {
-      intent: "default",
-      graphEvents: [...state.graphEvents, ...events]
-    };
-  }
-
-  const IntentSchema = z.object({
-    intent: z.enum(["smartthings", "ros2", "default"]),
-    confidence: z.enum(["low", "medium", "high"]),
-    rationale_short: z.string().min(1)
-  });
-
-  let intent: "smartthings" | "ros2" | "default" = "default";
-
-  try {
-    const recentHistory = state.messages.slice(-3);
-    const historyBlock = recentHistory.length > 0
-      ? recentHistory.map((m) => `[${m._getType()}]: ${typeof m.content === "string" ?
-        m.content.slice(0, 200) : ""}`).join("\n")
-      : "(none)";
-    const prompt = `You are a router. Classify the user's request.\n\n
-    Recent history:\n${historyBlock}\n\n
-    Return ONLY valid JSON.\nSchema:\n${JSON.stringify(
-      {
-        intent: "smartthings|ros2|default",
-        confidence: "low|medium|high",
-        rationale_short: "short reason"
-      },
-      null, 2
-    )}\n\nUser text:\n${userText}\n`;
-
-    const res = await deps.llm.invoke([new HumanMessage(prompt)]);
-    const parsed = safeJsonParse(typeof res.content === "string" ? res.content : JSON.stringify(res.content));
-    const intentOut = IntentSchema.safeParse(parsed);
-    if (intentOut.success) {
-      const out = intentOut.data;
-      intent = out.confidence === "low" ? "default" : out.intent;
-    }
-  } catch {
-    // intent stays "default" on error
-  }
-
-  addEvent(events, nodeEvent({ node: "router_intent", phase: "end", summary: `intent=${intent}` }));
-  return { intent, graphEvents: [...state.graphEvents, ...events] };
-}
-
-// ── 节点：configure_agent ─────────────────────────────────────────────────
-// 注入 system prompt + 重置循环计数器。SystemMessage 只写一次（checkpoint 持久化后跨轮复用）
-
-async function setAgentContextNode(state: GraphStateType, deps: Deps): Promise<Partial<GraphStateType>> {
-  const events: GraphEvent[] = [];
-  addEvent(events, nodeEvent({ node: "configure_agent", phase: "start", summary: `intent=${state.intent ?? "default"}` }));
+  addEvent(events, nodeEvent({ node: "prepare", phase: "start", summary: "injecting system prompt" }));
 
   // 跨轮去重：checkpoint 恢复的 messages 可能已含 SystemMessage
   const hasSystem = state.messages.some(m => m instanceof SystemMessage);
   const systemMessages: BaseMessage[] = hasSystem ? [] : [new SystemMessage(deps.systemPrompt)];
 
-  addEvent(events, nodeEvent({ node: "configure_agent", phase: "end", summary: "context ready" }));
+  addEvent(events, nodeEvent({ node: "prepare", phase: "end", summary: "context ready" }));
 
   return {
     messages: systemMessages,
     agentLoopCount: 0,
+    toolResults: undefined,
+    finalText: undefined,
     graphEvents: [...state.graphEvents, ...events]
   };
 }
@@ -203,8 +87,7 @@ async function llmCallNode(state: GraphStateType, deps: Deps): Promise<Partial<G
   const loopIdx = state.agentLoopCount;
   addEvent(events, nodeEvent({ node: "llm_call", phase: "start", source: "llm", summary: `round ${loopIdx + 1}` }));
 
-  const activeTools = selectTools(state.intent, deps.tools);
-  const llmWithTools = deps.llm.bindTools(activeTools);
+  const llmWithTools = deps.llm.bindTools(deps.tools);
 
   try {
     const response = await llmWithTools.invoke(state.messages);
@@ -289,8 +172,6 @@ async function respondNode(state: GraphStateType): Promise<Partial<GraphStateTyp
 
   const text = lastAi && typeof lastAi.content === "string" ? lastAi.content.trim() : (state.finalText ?? "");
 
-  // TODO: Tool 自动动作 — 根据设备事件触发预定义 tool（如报警、联动）
-
   if (text) {
     addEvent(events, nodeEvent({ node: "respond", phase: "end", summary: `ok len=${text.length}` }));
     return { finalText: text, graphEvents: [...state.graphEvents, ...events] };
@@ -300,35 +181,17 @@ async function respondNode(state: GraphStateType): Promise<Partial<GraphStateTyp
   return { finalText: "", graphEvents: [...state.graphEvents, ...events] };
 }
 
-// ── 工具函数 ────────────────────────────────────────────────────────────
-
-function safeJsonParse(text: string): unknown {
-  try { return JSON.parse(text); } catch { return text; }
-}
-
 // ── 构建图 ──────────────────────────────────────────────────────────────
 
 export function buildV2Graph(deps: Deps) {
   const graph = new StateGraph(GraphState)
-    .addNode("ingest", ingestNode)
-    .addNode("device_ingest", deviceIngestNode)
-    .addNode("router_intent", (s: GraphStateType) => routeIntentNode(s, deps))
-    .addNode("configure_agent", (s: GraphStateType) => setAgentContextNode(s, deps))
+    .addNode("prepare", (s: GraphStateType) => prepareNode(s, deps))
     .addNode("llm_call", (s: GraphStateType) => llmCallNode(s, deps))
     .addNode("tool_node", (s: GraphStateType) => toolNode(s, deps))
     .addNode("respond", respondNode);
 
-  graph.addEdge("device_ingest", "configure_agent");
-  // START 根据 eventType 分流：chat → ingest，device_event → device_ingest
-  graph.addConditionalEdges(START, (s: GraphStateType) => {
-    return s.eventType === "device_event" ? "device_ingest" : "ingest";
-  }, {
-    "device_ingest": "device_ingest",
-    "ingest": "ingest"
-  });
-  graph.addEdge("ingest", "router_intent");
-  graph.addEdge("router_intent", "configure_agent");
-  graph.addEdge("configure_agent", "llm_call");
+  graph.addEdge(START, "prepare");
+  graph.addEdge("prepare", "llm_call");
 
   // llm_call 之后：有 tool_calls → 执行 tool；无 → 直接回复
   graph.addConditionalEdges("llm_call", (s: GraphStateType) => {

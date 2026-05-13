@@ -6,6 +6,9 @@
  * 不把 Slack client 传入 Agent（保持 Agent 对传输层无感）。
  */
 import type { WebClient } from "@slack/web-api";
+import { createLogger } from "../utils/logger.js";
+
+const log = createLogger("slack/notifier.ts");
 
 export type SlackNotifier = {
   /** 发送 Web 用户消息到 Slack 默认频道，返回消息 ts 用于后续 thread 回复 */
@@ -29,7 +32,7 @@ export function createSlackNotifier(
         });
         return result.ts;
       } catch (err) {
-        console.error("[slack:notifier] mirrorWebUserMessage failed:", err);
+        log.error("mirrorWebUserMessage", "failed:", err);
         return undefined;
       }
     },
@@ -42,7 +45,7 @@ export function createSlackNotifier(
           thread_ts: threadTs
         });
       } catch (err) {
-        console.error("[slack:notifier] mirrorWebFinal failed:", err);
+        log.error("mirrorWebFinal", "failed:", err);
       }
     },
 
@@ -54,7 +57,7 @@ export function createSlackNotifier(
           thread_ts: threadTs
         });
       } catch (err) {
-        console.error("[slack:notifier] mirrorWebError failed:", err);
+        log.error("mirrorWebError", "failed:", err);
       }
     }
   };

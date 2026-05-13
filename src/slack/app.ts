@@ -12,6 +12,9 @@ import { App, type AppOptions } from "@slack/bolt";
 import type { ChatEventOut } from "../types.js";
 import type { SmartAgent } from "../agent/agent.js";
 import { createSlackTransport } from "./transport.js";
+import { createLogger } from "../utils/logger.js";
+
+const log = createLogger("slack/app.ts");
 
 export async function startSlackApp(options: {
   agent: SmartAgent;
@@ -19,23 +22,23 @@ export async function startSlackApp(options: {
 }): Promise<App> {
   const { agent, broadcastSse } = options;
 
-  console.log("[slack] Initializing App with Socket Mode...");
+  log.info("startSlackApp", "Initializing App with Socket Mode...");
   const app = new App({
     socketMode: true,
     token: process.env.SLACK_BOT_TOKEN,
     appToken: process.env.SLACK_APP_TOKEN,
     signingSecret: process.env.SLACK_SIGNING_SECRET,
     logger: {
-      debug: (msg: string) => console.log("[slack:debug]", msg),
-      info: (msg: string) => console.log("[slack:info]", msg),
-      warn: (msg: string) => console.warn("[slack:warn]", msg),
-      error: (msg: string) => console.error("[slack:error]", msg),
+      debug: (msg: string) => log.debug("bolt", msg),
+      info: (msg: string) => log.info("bolt", msg),
+      warn: (msg: string) => log.warn("bolt", msg),
+      error: (msg: string) => log.error("bolt", msg),
       setLevel: () => {},
       getLevel: () => "debug" as any,
       setName: () => {},
     }
   } as AppOptions);
-  console.log("[slack] App created, calling app.start()...");
+  log.info("startSlackApp", "App created, calling app.start()...");
 
   const transport = createSlackTransport({
     agent,
@@ -44,7 +47,7 @@ export async function startSlackApp(options: {
   });
 
   app.event("app_mention" as any, async ({ event }: any) => {
-    console.log("[slack] app_mention received:", { text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
+    log.info("app_mention", "received:", { text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
     await transport.handleAppMention({
       text: event.text,
       channel: event.channel,
@@ -56,15 +59,15 @@ export async function startSlackApp(options: {
   });
 
   app.event("message" as any, async ({ event }: any) => {
-    console.log("[slack] message event received:", { channel_type: event.channel_type, subtype: (event as any).subtype, text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
+    log.info("message", "received:", { channel_type: event.channel_type, subtype: (event as any).subtype, text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
 
     if ((event as any).subtype) {
-      console.log("[slack] message skipped: subtype=", (event as any).subtype);
+      log.info("message", "skipped: subtype=", (event as any).subtype);
       return;
     }
 
     if (event.channel_type !== "im") {
-      console.log("[slack] message skipped: channel_type=", event.channel_type, "(not DM)");
+      log.info("message", "skipped: channel_type=", event.channel_type, "(not DM)");
       return;
     }
 
@@ -79,10 +82,10 @@ export async function startSlackApp(options: {
   });
 
   app.error(async (error) => {
-    console.error("[slack] Bolt App error:", error);
+    log.error("bolt", "App error:", error);
   });
 
   await app.start();
-  console.log("[slack] Socket Mode app started");
+  log.info("startSlackApp", "Socket Mode app started");
   return app;
 }

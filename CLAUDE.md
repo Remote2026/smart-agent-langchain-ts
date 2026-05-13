@@ -20,21 +20,17 @@ A local smart-home assistant using **LangGraph StateGraph** (v0.4) with an Expre
 
 ```
 Web UI (SSE) → POST /api/chat → SmartAgent → LangGraph StateGraph → tools → SSE response
-Poll script → POST /api/device-event → device_ingest node → (same graph) → SSE broadcast
+Poll script → POST /api/device-event → (same graph) → SSE broadcast
 ```
 
 ### StateGraph nodes (src/agent/v2/graph.ts)
 
 ```
-chat:        ingest → router_intent → prepare_agent → llm_call ⇄ tool_node → respond → END
-device_event:  device_ingest ────────────────────────┘
+START → prepare → llm_call ⇄ tool_node → respond → END
 ```
 
-- **ingest**: validates text, sets `userText`. Empty text → `intent=default`.
-- **device_ingest**: device event entry, sets `intent` directly (bypasses router).
-- **router_intent**: LLM classifies user text into `smartthings | ros2 | default`. Low confidence → `default`.
-- **prepare_agent**: picks tool subset by intent, injects SystemMessage, resets loop counter.
-- **llm_call**: LLM with `bindTools`. Either returns `tool_calls` (→ tool_node) or final text (→ respond).
+- **prepare**: unified entry node. Injects SystemMessage (cross-round dedup), resets loop counter.
+- **llm_call**: LLM with `bindTools(deps.tools)` (all tools, no intent filtering). Either returns `tool_calls` (→ tool_node) or final text (→ respond).
 - **tool_node**: wraps LangGraph `ToolNode`, executes tool_calls, appends to `toolResults`.
 - **respond**: extracts last non-tool-call `AIMessage.content` as `finalText`.
 
@@ -42,7 +38,7 @@ Agent loop: max 5 rounds (`llm_call ⇄ tool_node`), enforced by `agentLoopCount
 
 ### State (Annotation channels)
 
-Key fields in `GraphState`: `sessionId`, `eventType` (`"chat"|"device_event"`), `input`, `messages` (append reducer, max 50), `userText`, `intent`, `toolResults` (replace), `finalText`, `graphEvents` (per-round replace), `agentLoopCount`.
+Key fields in `GraphState`: `sessionId`, `input`, `messages` (append reducer, max 50), `toolResults` (replace), `finalText`, `graphEvents` (per-round replace), `agentLoopCount`.
 
 ### SSE event protocol
 

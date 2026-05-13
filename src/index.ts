@@ -13,6 +13,9 @@ import { DEFAULT_SESSION_ID } from "./session.js";
 import { startSlackApp } from "./slack/app.js";
 import { createSlackNotifier } from "./slack/notifier.js";
 import type { SlackNotifier } from "./slack/notifier.js";
+import { createLogger } from "./utils/logger.js";
+
+const log = createLogger("index.ts");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -269,7 +272,7 @@ app.post("/api/device-event", async (request, response) => {
 // -------------------------------------------------
 
 app.listen(appConfig.env.PORT, () => {
-  console.log(`Smart Agent web chat is running at http://localhost:${appConfig.env.PORT}`);
+  log.info("start", `Smart Agent web chat is running at http://localhost:${appConfig.env.PORT}`);
 
   // Slack 为可选功能：SLACK_ENABLED=true 时才启动 Socket Mode
   if (appConfig.env.SLACK_ENABLED) {
@@ -281,10 +284,10 @@ app.listen(appConfig.env.PORT, () => {
           app.client,
           appConfig.env.SLACK_DEFAULT_CHANNEL_ID
         );
-        console.log("[slack] Web->Slack mirror enabled");
+        log.info("start", "Web->Slack mirror enabled");
       }
     }).catch((err) => {
-      console.error("[slack] Failed to start Slack App:", err);
+      log.error("start", "Failed to start Slack App:", err);
     });
   }
 });

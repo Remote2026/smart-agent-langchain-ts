@@ -33,13 +33,10 @@ events.onerror = () => {
 };
 
 const GRAPH_NODES = [
-  "ingest",
-  "router_intent",
-  "smartthings_node",
-  "ros2_node",
-  "default_node",
-  "respond",
-  "finalize"
+  "prepare",
+  "llm_call",
+  "tool_node",
+  "respond"
 ];
 const graphStepState = new Map();
 

@@ -37,12 +37,6 @@ export type AgentState = {
   sessionId: string;
   input: InputMessage;
   messages: BaseMessage[];
-  /**
-   * 归一化后的用户文本（用于 router_intent/respond）。
-   * 本版仅文本：由 ingest 从 input.text 生成。
-   */
-  userText?: string;
-  intent?: "smartthings" | "ros2" | "default";
   toolResults?: unknown;
   finalText?: string;
   graphEvents: GraphEvent[];
