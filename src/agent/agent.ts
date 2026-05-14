@@ -7,6 +7,7 @@ import type { Channel, ChatEventOut, GraphEvent } from "../types.js";
 import type { InputMessage } from "./v2/state.js";
 import { graphEventToSse } from "./v2/events.js";
 import { buildV2Graph } from "./v2/graph.js";
+import { loadAppConfig } from "../config.js";
 import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("agent.ts");
@@ -98,11 +99,14 @@ export class SmartAgent {
     const dbPath = options.dbPath ?? "checkpoints.db";
     this.graphDeps = { llm: model, tools: options.tools, dbPath };
 
+    const appConfig = loadAppConfig();
+
     this.v2Graph = buildV2Graph({
       llm: model,
       tools: options.tools,
       systemPrompt: this.systemPrompt,
-      checkpointer: SqliteSaver.fromConnString(dbPath)
+      checkpointer: SqliteSaver.fromConnString(dbPath),
+      deepseekReasoningFix: appConfig.env.DEEPSEEK_REASONING_FIX
     });
     log.info("constructor", "Checkpointer:", dbPath);
   }

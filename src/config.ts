@@ -15,7 +15,11 @@ const envSchema = z.object({
   SLACK_APP_TOKEN: z.string().optional(),         // Socket Mode App Token (xapp-...)
   SLACK_SIGNING_SECRET: z.string().optional(),    // 仅 Socket Mode 验证签名用
   SLACK_MIRROR_WEB_MESSAGES: z.coerce.boolean().default(false), // Web→Slack 双向同步开关
-  SLACK_DEFAULT_CHANNEL_ID: z.string().optional()  // Mirror 目标频道（启用 mirror 时必填）
+  SLACK_DEFAULT_CHANNEL_ID: z.string().optional(),  // Mirror 目标频道（启用 mirror 时必填）
+  // DeepSeek V4 系列模型适配：在 thinking mode 下需要将 reasoning_content 传回 API，
+  // 否则多轮对话（特别是 tool call 后）会返回 400 错误。
+  // 默认关闭，使用 DeepSeek V4 模型时手动开启。
+  DEEPSEEK_REASONING_FIX: z.coerce.boolean().default(false)
 });
 
 export function loadAppConfig() {
