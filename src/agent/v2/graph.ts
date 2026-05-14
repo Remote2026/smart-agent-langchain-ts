@@ -16,7 +16,6 @@ type Deps = {
   tools: StructuredToolInterface[];
   systemPrompt: string;
   checkpointer: BaseCheckpointSaver;
-  deepseekReasoningFix: boolean;
 };
 
 // ── 扁平化 GraphState ──────────────────────────────────────────────────
@@ -100,16 +99,6 @@ async function llmCallNode(state: GraphStateType, deps: Deps): Promise<Partial<G
         ? `tool_calls: ${response.tool_calls!.map(tc => tc.name).join(", ")}`
         : `final response len=${typeof response.content === "string" ? response.content.length : 0}`
     }));
-
-    // DeepSeek V4 系列模型在 thinking mode 下返回 reasoning_content，
-    // 后续请求必须原样传回，否则 API 返回 400。
-    // 将 reasoning_content 附加到 additional_kwargs，确保 LangChain 序列化时包含它。
-    if (deps.deepseekReasoningFix && response instanceof AIMessage && response.response_metadata?.reasoning_content) {
-      response.additional_kwargs = {
-        ...response.additional_kwargs,
-        reasoning_content: response.response_metadata.reasoning_content,
-      };
-    }
 
     return {
       messages: [response],

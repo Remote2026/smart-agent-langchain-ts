@@ -84,13 +84,18 @@ export class SmartAgent {
     tools: StructuredToolInterface[];
     dbPath?: string;
   }) {
+    const appConfig = loadAppConfig();
+
     const model = new ChatOpenAI({
       configuration: {
         baseURL: options.baseURL,
         apiKey: options.apiKey
       },
       model: options.model,
-      temperature: 0.2
+      temperature: 0.2,
+      ...(appConfig.env.DEEPSEEK_THINKING_MODE === "disabled"
+        ? { modelKwargs: { thinking: { type: "disabled" } } }
+        : {})
     });
 
     this.systemPrompt = createSystemPrompt();
@@ -99,14 +104,11 @@ export class SmartAgent {
     const dbPath = options.dbPath ?? "checkpoints.db";
     this.graphDeps = { llm: model, tools: options.tools, dbPath };
 
-    const appConfig = loadAppConfig();
-
     this.v2Graph = buildV2Graph({
       llm: model,
       tools: options.tools,
       systemPrompt: this.systemPrompt,
-      checkpointer: SqliteSaver.fromConnString(dbPath),
-      deepseekReasoningFix: appConfig.env.DEEPSEEK_REASONING_FIX
+      checkpointer: SqliteSaver.fromConnString(dbPath)
     });
     log.info("constructor", "Checkpointer:", dbPath);
   }
