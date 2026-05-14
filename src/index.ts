@@ -8,7 +8,6 @@ import { RosbridgeClient } from "./tools/ros2.js";
 import { SmartThingsClient } from "./tools/smartthings.js";
 import type { ChatEventOut } from "./types.js";
 import { ChatRequestSchema, DeviceEventRequestSchema, type InputMessage } from "./agent/v2/state.js";
-import { LogManager } from "./logging/index.js";
 import { DEFAULT_SESSION_ID } from "./session.js";
 import { startSlackApp } from "./slack/app.js";
 import { createSlackNotifier } from "./slack/notifier.js";
@@ -37,16 +36,6 @@ const agent = new SmartAgent({
   tools
 });
 
-/**
- * LogManager：把 SSE 事件落盘（JSONL），每条记录同时包含：
- * - payload：完整结构化事件
- * - summary：人类可读摘要（方便快速扫一眼发生了什么）
- *
- * 写入路径：logs/YYYY-MM-DD/<sessionId>.jsonl
- * - 单一事实源：直接使用 emit(event) 的 ChatEventOut
- */
-const logManager = new LogManager({ baseDir: path.resolve(process.cwd(), "logs") });
-
 const app = express();
 // 图片 base64 体积比纯文本大，10MB 足够智能家居场景
 app.use(express.json({ limit: "10mb" }));
@@ -55,7 +44,7 @@ app.use(express.static(path.resolve(__dirname, "..", "public")));
 // SSE 客户端集合：用于设备事件广播到所有已连接的 Web UI
 const sseClients = new Set<import("http").ServerResponse>();
 
-/** 广播 SSE 事件到所有已连接客户端，同时落盘日志 */
+/** 广播 SSE 事件到所有已连接客户端 */
 function broadcastSse(event: ChatEventOut): void {
   for (const client of sseClients) {
     try {
@@ -65,7 +54,6 @@ function broadcastSse(event: ChatEventOut): void {
       sseClients.delete(client);
     }
   }
-  logManager.append(event);
 }
 
 // ---- Slack 相关（可选，SLACK_ENABLED=true 时启用） ----
@@ -184,7 +172,6 @@ app.post("/api/chat", async (request, response) => {
   const emit = (event: ChatEventOut) => {
     response.write(`event: ${event.type}\n`);
     response.write(`data: ${JSON.stringify(event)}\n\n`);
-    logManager.append(event);
     maybeMirrorToSlack(event, mirrorThreadTs); // Web→Slack mirror 旁路
   };
 
@@ -292,10 +279,19 @@ app.listen(appConfig.env.PORT, () => {
   }
 });
 
-// 优雅关闭：SIGINT 时断开 Slack WebSocket，避免孤立连接
-process.on("SIGINT", () => {
+// 优雅关闭：断开 Slack WebSocket，避免孤立连接导致反复重连
+function gracefulShutdown(signal: string) {
+  log.info("shutdown", `received ${signal}, stopping Slack app...`);
   if (slackApp) {
-    slackApp.stop().catch(() => {});
+    slackApp.stop()
+      .then(() => log.info("shutdown", "Slack app stopped"))
+      .catch((err) => log.error("shutdown", "Slack stop failed:", err))
+      .finally(() => process.exit(0));
+    // 强制退出兜底：5 秒后仍未退出则强制终止
+    setTimeout(() => process.exit(1), 5000);
+  } else {
+    process.exit(0);
   }
-  process.exit(0);
-});
+}
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));

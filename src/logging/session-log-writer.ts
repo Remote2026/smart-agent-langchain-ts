@@ -16,34 +16,26 @@ type LogPaths = {
  */
 export class SessionLogWriter {
   private writeQueue: Promise<void> = Promise.resolve();
+  private dirReady = false;
+  private jsonlPath: string;
 
   constructor(
     private readonly sessionId: string,
     private readonly baseDir: string,
     private readonly date: string,
     private readonly now: () => string = () => new Date().toISOString()
-  ) {}
-
-  getPaths(): LogPaths {
+  ) {
     const dir = path.join(this.baseDir, this.date);
-    return {
-      jsonlPath: path.join(dir, `${this.sessionId}.jsonl`)
-    };
+    this.jsonlPath = path.join(dir, `${this.sessionId}.jsonl`);
   }
 
-  /**
-   * 追加一条 SSE 事件到本会话日志。
-   * - JSONL：一行一个 JSON（便于 grep/jq/后处理）
-   * - Text：一行一个摘要（便于人直接看）
-   */
+  getPaths(): LogPaths {
+    return { jsonlPath: this.jsonlPath };
+  }
+
   append(event: ChatEventOut): void {
-    // 关键点：只写 1 个文件（JSONL），但每条记录同时包含：
-    // - summary：人类可读摘要
-    // - origin：业务代码位置（文件名/函数名），用于快速定位上下文
-    // - source：数据来源（node/tool/llm/sse 等）
     const summary = formatTextLine(this.now(), event);
     const meta = inferMeta(event);
-    const prettyPayload = formatPrettyPayload(event.payload);
     const record = {
       at: this.now(),
       sessionId: event.sessionId,
@@ -51,22 +43,24 @@ export class SessionLogWriter {
       source: meta.source,
       origin: meta.origin,
       summary,
-      /**
-       * prettyPayload：为了人类阅读做的“缩进 + 截断”版本。
-       * - 仍然保留 payload 原始结构化数据（机器友好）
-       * - prettyPayload 主要用于快速浏览（人眼友好）
-       */
-      prettyPayload,
+      prettyPayload: formatPrettyPayload(event.payload),
       payload: event.payload
     };
 
-    const { jsonlPath } = this.getPaths();
     const jsonLine = `${JSON.stringify(record)}\n`;
 
-    this.writeQueue = this.writeQueue.then(async () => {
-      await fs.promises.mkdir(path.dirname(jsonlPath), { recursive: true });
-      await fs.promises.appendFile(jsonlPath, jsonLine, "utf8");
-    });
+    // 保证 mkdir 只执行一次，后续 append 直接写文件
+    if (!this.dirReady) {
+      this.writeQueue = this.writeQueue.then(async () => {
+        await fs.promises.mkdir(path.dirname(this.jsonlPath), { recursive: true });
+        this.dirReady = true;
+        await fs.promises.appendFile(this.jsonlPath, jsonLine, "utf8");
+      });
+    } else {
+      this.writeQueue = this.writeQueue.then(() =>
+        fs.promises.appendFile(this.jsonlPath, jsonLine, "utf8")
+      );
+    }
   }
 }
 
@@ -76,10 +70,10 @@ type InferredMeta = {
 };
 
 /**
- * inferMeta：把“事件 -> 代码位置/数据来源”补齐到落盘日志里。
+ * inferMeta：把"事件 -> 代码位置/数据来源"补齐到落盘日志里。
  *
  * 为什么在 logger 做：
- * - v1 先以最小侵入满足“日志必须体现 file/fn/source”的需求
+ * - v1 先以最小侵入满足"日志必须体现 file/fn/source"的需求
  * - 未来如果 GraphEvent 本身已携带 origin/source，可直接在这里读取并覆盖
  */
 function inferMeta(event: ChatEventOut): InferredMeta {
@@ -106,17 +100,11 @@ function inferMeta(event: ChatEventOut): InferredMeta {
 }
 
 function mapNodeToOrigin(node: string): { file: string; fn: string } | undefined {
-  // 当前 V2 图的 node 都在 src/agent/v2/graph.ts；函数名与 node 基本一一对应
   const file = "src/agent/v2/graph.ts";
   const table: Record<string, string> = {
-    ingest: "ingestNode",
-    route_modality: "routeModalityNode",
-    image_analysis: "imageAnalysisNode",
-    text_prepare: "textPrepareNode",
-    route_intent: "routeIntentNode",
-    smartthings_node: "smartthingsNode",
-    ros2_node: "ros2Node",
-    default_node: "defaultNode",
+    prepare: "prepareNode",
+    llm_call: "llmCallNode",
+    tool_node: "toolNode",
     respond: "respondNode"
   };
   const fn = table[node];
@@ -142,7 +130,7 @@ function formatTextLine(at: string, event: ChatEventOut): string {
   const where = meta.origin ? `${meta.origin.file}#${meta.origin.fn}` : "-";
   const prefix = `${at} [${meta.source}] [${where}]`;
 
-  // 目标：让你“肉眼扫一眼”就知道发生了什么，同时不泄露敏感信息（v1 不做深度脱敏）
+  // 目标：让你"肉眼扫一眼"就知道发生了什么，同时不泄露敏感信息（v1 不做深度脱敏）
   if (event.type === "status") {
     return `${prefix} status ${event.payload.status}`;
   }
@@ -195,7 +183,7 @@ function safeInlineJson(value: unknown): string {
 
 function formatPrettyPayload(payload: unknown): string {
   // JSONL 仍然是一行一个 JSON；这里返回的字符串会在 JSON 中以 \n 形式保存
-  // 目标：让你在 editor 里展开字段时能看到“可读的缩进结构”
+  // 目标：让你在 editor 里展开字段时能看到"可读的缩进结构"
   const maxChars = 6000;
   try {
     const text = JSON.stringify(payload, null, 2);

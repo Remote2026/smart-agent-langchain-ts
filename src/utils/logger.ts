@@ -7,25 +7,27 @@ export interface Logger {
   debug: LogFn;
 }
 
+// UTC+8 (Asia/Shanghai) 时间戳，格式: 2026-05-14T10:12:40.606+08:00
+const beijingTime = () => {
+  const d = new Date(Date.now() + 8 * 3600_000);
+  return d.toISOString().replace("Z", "+08:00");
+};
+
 export function createLogger(file: string): Logger {
   const fmt = (level: string, fn: string, ...args: unknown[]) => {
-    const ts = new Date().toISOString();
-    console.log(`[${ts}] [${level}] [${file}#${fn}]`, ...args);
+    console.log(`[${beijingTime()}] [${level}] [${file}#${fn}]`, ...args);
   };
 
   return {
     info: (fn, ...args) => fmt("INFO", fn, ...args),
     warn: (fn, ...args) => {
-      const ts = new Date().toISOString();
-      console.warn(`[${ts}] [WARN] [${file}#${fn}]`, ...args);
+      console.warn(`[${beijingTime()}] [WARN] [${file}#${fn}]`, ...args);
     },
     error: (fn, ...args) => {
-      const ts = new Date().toISOString();
-      console.error(`[${ts}] [ERROR] [${file}#${fn}]`, ...args);
+      console.error(`[${beijingTime()}] [ERROR] [${file}#${fn}]`, ...args);
     },
     debug: (fn, ...args) => {
-      const ts = new Date().toISOString();
-      console.debug(`[${ts}] [DEBUG] [${file}#${fn}]`, ...args);
+      console.debug(`[${beijingTime()}] [DEBUG] [${file}#${fn}]`, ...args);
     },
   };
 }

@@ -34,7 +34,7 @@ export async function startSlackApp(options: {
       warn: (msg: string) => log.warn("bolt", msg),
       error: (msg: string) => log.error("bolt", msg),
       setLevel: () => {},
-      getLevel: () => "debug" as any,
+      getLevel: () => "info" as any,
       setName: () => {},
     }
   } as AppOptions);
