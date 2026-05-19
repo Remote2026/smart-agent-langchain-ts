@@ -3,6 +3,13 @@ import { z } from "zod";
 
 loadEnv();
 
+/** Parse boolean from env string. "false", "0", "no", "off", "" → false */
+function boolEnv(val: unknown): boolean {
+  if (typeof val === "boolean") return val;
+  if (typeof val !== "string") return false;
+  return !["false", "0", "no", "off", ""].includes(val.toLowerCase());
+}
+
 const envSchema = z.object({
   OPENAI_BASE_URL: z.string().url().default("https://dashscope.aliyuncs.com/compatible-mode/v1"),
   OPENAI_API_KEY: z.string().min(1),
@@ -10,11 +17,11 @@ const envSchema = z.object({
   ROSBRIDGE_URL: z.string().url().default("ws://localhost:9090"),
   PORT: z.coerce.number().int().positive().default(3000),
   // Slack Socket Mode 集成（默认关闭，不影响现有功能）
-  SLACK_ENABLED: z.coerce.boolean().default(false),
+  SLACK_ENABLED: z.preprocess(boolEnv, z.boolean()).default(false),
   SLACK_BOT_TOKEN: z.string().optional(),         // Bot User OAuth Token (xoxb-...)
   SLACK_APP_TOKEN: z.string().optional(),         // Socket Mode App Token (xapp-...)
   SLACK_SIGNING_SECRET: z.string().optional(),    // 仅 Socket Mode 验证签名用
-  SLACK_MIRROR_WEB_MESSAGES: z.coerce.boolean().default(false), // Web→Slack 双向同步开关
+  SLACK_MIRROR_WEB_MESSAGES: z.preprocess(boolEnv, z.boolean()).default(false), // Web→Slack 双向同步开关
   SLACK_DEFAULT_CHANNEL_ID: z.string().optional(),  // Mirror 目标频道（启用 mirror 时必填）
   // DeepSeek V4 系列模型思考模式开关（仅在使用 DeepSeek 时设置）：
   // - enabled:  启用 thinking mode（返回 reasoning_content，多轮对话需要传回）
