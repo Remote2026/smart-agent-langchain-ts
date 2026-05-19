@@ -16,6 +16,11 @@ const envSchema = z.object({
   OPENAI_MODEL: z.string().min(1).default("qwen-vl-plus"), // 支持视觉的多模态模型
   ROSBRIDGE_URL: z.string().url().default("ws://localhost:9090"),
   PORT: z.coerce.number().int().positive().default(3000),
+  // SmartThings OAuth tokens (ACCESS_TOKEN replaces PAT)
+  SMARTTHINGS_CLIENT_ID: z.string().optional(),
+  SMARTTHINGS_ACCESS_TOKEN: z.string().optional(),
+  SMARTTHINGS_REFRESH_TOKEN: z.string().optional(),
+  SMARTTHINGS_CLI_CONFIG_PATH: z.string().default("~/.config/@smartthings/cli/config.yaml"),
   // Slack Socket Mode 集成（默认关闭，不影响现有功能）
   SLACK_ENABLED: z.preprocess(boolEnv, z.boolean()).default(false),
   SLACK_BOT_TOKEN: z.string().optional(),         // Bot User OAuth Token (xoxb-...)
