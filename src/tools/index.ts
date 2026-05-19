@@ -2,6 +2,7 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { RosbridgeClient } from "./ros2.js";
 import { SmartThingsClient } from "./smartthings.js";
+import { refreshAndSaveTokens } from "./smartthings-auth.js";
 
 export function createTools(options: {
   smartThings: SmartThingsClient;
@@ -83,6 +84,33 @@ export function createTools(options: {
       description: "Drive the robot to close the fridge door.",
       schema: z.object({}),
       func: async () => JSON.stringify(await rosbridge.driveRobotCloseFridgeDoor())
+    }),
+    new DynamicStructuredTool({
+      name: "smartthings_refresh_token",
+      description: "Refresh SmartThings OAuth access token using the refresh token. Updates .env and CLI config with new tokens. Only call this when token expiry is suspected.",
+      schema: z.object({}),
+      func: async () => {
+        const refreshToken = process.env.SMARTTHINGS_REFRESH_TOKEN;
+        const clientId = process.env.SMARTTHINGS_CLIENT_ID;
+        if (!refreshToken) {
+          return JSON.stringify({ error: "SMARTTHINGS_REFRESH_TOKEN not configured in .env" });
+        }
+        if (!clientId) {
+          return JSON.stringify({ error: "SMARTTHINGS_CLIENT_ID not configured in .env" });
+        }
+        try {
+          const tokens = await refreshAndSaveTokens(refreshToken, clientId);
+          smartThings.setToken(tokens.access_token);
+          return JSON.stringify({
+            ok: true,
+            message: "Token refreshed and saved successfully",
+            expires_in: tokens.expires_in,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return JSON.stringify({ error: msg });
+        }
+      }
     })
   ];
 }

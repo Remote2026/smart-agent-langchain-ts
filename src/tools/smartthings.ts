@@ -11,8 +11,22 @@ export type SmartThingsDevice = {
 };
 
 export class SmartThingsClient {
+  private token: string;
+
+  constructor(token?: string) {
+    this.token = token ?? process.env.SMARTTHINGS_ACCESS_TOKEN ?? process.env.SMARTTHINGS_PAT ?? "";
+  }
+
+  setToken(token: string): void {
+    this.token = token;
+  }
+
+  private cliArgs(cmd: string): string {
+    return this.token ? `${cmd} --token=${this.token}` : cmd;
+  }
+
   listDevices(): { devices: SmartThingsDevice[] } {
-    const raw = execSync("smartthings devices ", {
+    const raw = execSync(this.cliArgs("smartthings devices"), {
       encoding: "utf-8",
       timeout: 60000,
     }).trim();
@@ -43,7 +57,7 @@ export class SmartThingsClient {
   }
 
   getDeviceStatus(deviceId: string): unknown {
-    const raw = execSync(`smartthings devices:status ${deviceId} -j`, {
+    const raw = execSync(this.cliArgs(`smartthings devices:status ${deviceId} -j`), {
       encoding: "utf-8",
       timeout: 60000,
     }).trim();
