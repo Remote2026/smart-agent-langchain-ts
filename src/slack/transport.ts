@@ -120,7 +120,7 @@ export function createSlackTransport(options: {
       await processMessage(
         text ?? "",
         event.channel,
-        threadTs,
+        undefined,
         { kind: "image", imageBase64: base64, mimeType, text }
       );
       return;
@@ -134,15 +134,14 @@ export function createSlackTransport(options: {
 
     if (!event.text?.trim()) { log.info("handleDirectMessage", "skipped: empty text"); return; }
 
-    const threadTs = event.thread_ts ?? event.ts;
     log.info("handleDirectMessage", "processing DM -> agent");
-    await processMessage(event.text.trim(), event.channel, threadTs);
+    await processMessage(event.text.trim(), event.channel, undefined);
   }
 
   async function processMessage(
     text: string,
     slackChannel: string,
-    threadTs: string,
+    threadTs: string | undefined,
     overrideMessage?: InputMessage // 非 text 消息时传入（如 kind:"image"）
   ) {
     // emit 双重分发：
@@ -155,7 +154,7 @@ export function createSlackTransport(options: {
         slackClient.chat.postMessage({
           channel: slackChannel,
           text: event.payload.text,
-          thread_ts: threadTs
+          ...(threadTs ? { thread_ts: threadTs } : {})
         }).catch(err => log.error("processMessage", "final reply failed:", err));
       }
 
@@ -163,7 +162,7 @@ export function createSlackTransport(options: {
         slackClient.chat.postMessage({
           channel: slackChannel,
           text: `处理失败：${event.payload.message}`,
-          thread_ts: threadTs
+          ...(threadTs ? { thread_ts: threadTs } : {})
         }).catch(err => log.error("processMessage", "error reply failed:", err));
       }
     };
