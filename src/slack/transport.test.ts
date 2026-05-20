@@ -109,7 +109,7 @@ describe("createSlackTransport", () => {
       expect(broadcastSse).toHaveBeenCalledWith(expect.objectContaining({ channel: "slack", type: "tool" }));
     });
 
-    it("sends final events to Slack", async () => {
+    it("sends final events to Slack without thread_ts for DM", async () => {
       const { transport, agent, slackClient } = makeTransport();
 
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
@@ -122,12 +122,14 @@ describe("createSlackTransport", () => {
         expect.objectContaining({
           channel: "D2",
           text: "done!",
-          thread_ts: "2"
         })
+      );
+      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
+        expect.not.objectContaining({ thread_ts: expect.anything() })
       );
     });
 
-    it("sends error events to Slack", async () => {
+    it("sends error events to Slack without thread_ts for DM", async () => {
       const { transport, agent, slackClient } = makeTransport();
 
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
@@ -140,8 +142,10 @@ describe("createSlackTransport", () => {
         expect.objectContaining({
           channel: "D3",
           text: "处理失败：boom",
-          thread_ts: "3"
         })
+      );
+      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
+        expect.not.objectContaining({ thread_ts: expect.anything() })
       );
     });
 
@@ -158,14 +162,14 @@ describe("createSlackTransport", () => {
       expect(slackClient.chat.postMessage).not.toHaveBeenCalled();
     });
 
-    it("uses event ts as thread_ts when thread_ts is absent", async () => {
+    it("uses thread_ts for app_mention events", async () => {
       const { transport, agent, slackClient } = makeTransport();
 
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
         input.emit({ sessionId: "s1", channel: "slack", type: "final", payload: { text: "ok" } } as ChatEventOut);
       });
 
-      await transport.handleDirectMessage({ text: "test", channel: "D5", ts: "ts.999" });
+      await transport.handleAppMention({ text: "test", channel: "C5", ts: "ts.999" });
 
       expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ thread_ts: "ts.999" })
