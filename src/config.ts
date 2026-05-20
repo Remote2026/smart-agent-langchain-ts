@@ -15,7 +15,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().min(1).default("qwen-vl-plus"), // 支持视觉的多模态模型
   ROSBRIDGE_URL: z.string().url().default("ws://localhost:9090"),
-  ROBOT_API_URL: z.string().url().default("http://127.0.0.1:9999"),
+  FOXGLOVE_URL: z.string().url().default("ws://172.18.0.1:8765"),
   PORT: z.coerce.number().int().positive().default(3000),
   // SmartThings OAuth tokens (ACCESS_TOKEN replaces PAT)
   SMARTTHINGS_CLIENT_ID: z.string().optional(),

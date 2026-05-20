@@ -1,34 +1,61 @@
 import { z } from "zod";
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { loadAppConfig } from "../config.js";
+import type { FoxgloveClient } from "../foxglove/client.js";
 
-const ROBOT_API_URL = loadAppConfig().env.ROBOT_API_URL;
+const CMD_VEL_TOPIC = "/turtle1/cmd_vel";
+const PUB_HZ = 10;
 
-async function robotRequest(action: string, params: Record<string, string | number> = {}) {
-  const qs = new URLSearchParams(
-    Object.entries(params).map(([k, v]) => [k, String(v)])
-  ).toString();
-  const url = `${ROBOT_API_URL}/${action}${qs ? "?" + qs : ""}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Robot API HTTP ${res.status}`);
+export function createRobotTools(foxglove: FoxgloveClient) {
+  let cmdVelChannelPromise: Promise<number> | undefined;
+  let stopTimer: NodeJS.Timeout | null = null;
+
+  async function getChannel(): Promise<number> {
+    if (!cmdVelChannelPromise) {
+      cmdVelChannelPromise = foxglove.advertiseTopic(CMD_VEL_TOPIC);
+    }
+    return cmdVelChannelPromise;
   }
-  const data = await res.json();
-  if (!data.ok && data.error) {
-    throw new Error(`Robot API error: ${data.error}`);
-  }
-  return data;
-}
 
-export function createRobotTools() {
+  function scheduleStop(delayMs: number) {
+    if (stopTimer) clearTimeout(stopTimer);
+    stopTimer = setTimeout(() => {
+      foxglove.stopPublishing();
+      foxglove.setTwist(0, 0, 0, 0, 0, 0);
+      getChannel().then((cid) =>
+        foxglove.publishJson(cid, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } })
+      );
+    }, delayMs);
+  }
+
+  function cancelStop() {
+    if (stopTimer) {
+      clearTimeout(stopTimer);
+      stopTimer = null;
+    }
+  }
+
+  async function startMotion(lx: number, ly: number, lz: number, ax: number, ay: number, az: number) {
+    cancelStop();
+    const cid = await getChannel();
+    foxglove.setTwist(lx, ly, lz, ax, ay, az);
+    foxglove.startPublishing(cid, { linear: { x: lx, y: ly, z: lz }, angular: { x: ax, y: ay, z: az } }, PUB_HZ);
+  }
+
+  async function doStop() {
+    cancelStop();
+    foxglove.stopPublishing();
+    foxglove.setTwist(0, 0, 0, 0, 0, 0);
+    const cid = await getChannel();
+    foxglove.publishJson(cid, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+  }
+
   return [
     new DynamicStructuredTool({
       name: "robot_status",
       description: "Check if the robot controller is connected and ready.",
       schema: z.object({}),
       func: async () => {
-        const data = await robotRequest("status");
-        return `Robot connected: ${data.connected}, ready: ${data.ready}`;
+        return `Robot connected: ${foxglove.connected}`;
       },
     }),
 
@@ -57,11 +84,8 @@ export function createRobotTools() {
           angularZ: z.number().min(-3).max(3).default(0),
           duration: z.number().min(0).max(10).default(1),
         }).parse(input);
-        await robotRequest("move", {
-          lx: linearX, ly: linearY, lz: linearZ,
-          ax: angularX, ay: angularY, az: angularZ,
-          time: duration,
-        });
+        await startMotion(linearX, linearY, linearZ, angularX, angularY, angularZ);
+        if (duration > 0) scheduleStop(duration * 1000);
         const desc = duration > 0 ? `for ${duration}s` : "continuously (must call stop later)";
         return `Executing: linear=(${linearX},${linearY},${linearZ}) m/s, angular=(${angularX},${angularY},${angularZ}) rad/s ${desc}`;
       },
@@ -79,7 +103,8 @@ export function createRobotTools() {
           speed: z.number().min(0.5).max(2).default(1.5),
           duration: z.number().min(0.1).max(10).default(1),
         }).parse(input);
-        await robotRequest("forward", { speed, time: duration });
+        await startMotion(speed, 0, 0, 0, 0, 0);
+        scheduleStop(duration * 1000);
         return `Moving forward at ${speed} m/s for ${duration} seconds.`;
       },
     }),
@@ -96,7 +121,8 @@ export function createRobotTools() {
           speed: z.number().min(0.5).max(2).default(1.5),
           duration: z.number().min(0.1).max(10).default(1),
         }).parse(input);
-        await robotRequest("backward", { speed, time: duration });
+        await startMotion(-speed, 0, 0, 0, 0, 0);
+        scheduleStop(duration * 1000);
         return `Moving backward at ${speed} m/s for ${duration} seconds.`;
       },
     }),
@@ -115,8 +141,9 @@ export function createRobotTools() {
           speed: z.number().min(0).max(3).default(0.5),
           duration: z.number().min(0.1).max(10).default(1),
         }).parse(input);
-        const action = direction === "left" ? "left" : "right";
-        await robotRequest(action, { speed, time: duration });
+        const az = direction === "left" ? speed : -speed;
+        await startMotion(0, 0, 0, 0, 0, az);
+        scheduleStop(duration * 1000);
         return `Turning ${direction} at ${speed} rad/s for ${duration} seconds.`;
       },
     }),
@@ -126,7 +153,7 @@ export function createRobotTools() {
       description: "Stop the robot immediately. Call this if the user says stop, emergency, or halt.",
       schema: z.object({}),
       func: async () => {
-        await robotRequest("stop");
+        await doStop();
         return "Robot stopped immediately.";
       },
     }),

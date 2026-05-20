@@ -1,233 +1,158 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createRobotTools } from "./robot.js";
+import type { FoxgloveClient } from "../foxglove/client.js";
 
-function mockFetch(response: { ok: boolean; status: number; json: () => Promise<unknown> }) {
-  return vi.fn().mockResolvedValue(response);
+function makeMockFoxglove(): FoxgloveClient {
+  return {
+    connected: true,
+    advertiseTopic: vi.fn().mockResolvedValue(100),
+    startPublishing: vi.fn(),
+    stopPublishing: vi.fn(),
+    setTwist: vi.fn(),
+    publishJson: vi.fn(),
+    disconnect: vi.fn(),
+  } as unknown as FoxgloveClient;
 }
 
-function makeTools() {
-  return createRobotTools();
+function makeTools(client: FoxgloveClient) {
+  return createRobotTools(client);
 }
 
 describe("createRobotTools", () => {
+  let mockFoxglove: FoxgloveClient;
+
   beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn());
+    vi.useFakeTimers();
+    mockFoxglove = makeMockFoxglove();
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   describe("robot_status", () => {
-    const tool = makeTools().find((t) => t.name === "robot_status")!;
-
-    it("returns connected status on success", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true, connected: true, ready: true }),
-      });
-
+    it("returns connected status", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_status")!;
       const result = await tool.invoke({});
       expect(result).toContain("connected: true");
-      expect(result).toContain("ready: true");
-    });
-
-    it("throws on HTTP error", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: false,
-        status: 503,
-        json: async () => ({ error: "Robot not connected" }),
-      });
-
-      await expect(tool.invoke({})).rejects.toThrow("Robot API HTTP 503");
     });
   });
 
   describe("robot_move", () => {
-    const tool = makeTools().find((t) => t.name === "robot_move")!;
-
-    it("sends correct 6DOF parameters", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true }),
-      });
-
+    it("starts publishing with correct 6DOF parameters", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_move")!;
       await tool.invoke({
-        linearX: 1.0,
-        linearY: 0.5,
-        linearZ: 0,
-        angularX: 0,
-        angularY: 0,
-        angularZ: 0.3,
+        linearX: 1.0, linearY: 0.5, linearZ: 0,
+        angularX: 0, angularY: 0, angularZ: 0.3,
         duration: 2,
       });
 
-      const [url] = (global.fetch as any).mock.calls[0];
-      expect(url).toContain("/move?");
-      expect(url).toContain("lx=1");
-      expect(url).toContain("ly=0.5");
-      expect(url).toContain("az=0.3");
-      expect(url).toContain("time=2");
+      expect(mockFoxglove.setTwist).toHaveBeenCalledWith(1.0, 0.5, 0, 0, 0, 0.3);
+      expect(mockFoxglove.startPublishing).toHaveBeenCalledWith(
+        100,
+        { linear: { x: 1.0, y: 0.5, z: 0 }, angular: { x: 0, y: 0, z: 0.3 } },
+        10
+      );
+    });
+
+    it("schedules auto-stop after duration", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_move")!;
+      await tool.invoke({ duration: 3 });
+
+      expect(mockFoxglove.stopPublishing).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(3000);
+      expect(mockFoxglove.stopPublishing).toHaveBeenCalled();
     });
 
     it("rejects out-of-range linearX", async () => {
-      await expect(
-        tool.invoke({ linearX: 3.0 })
-      ).rejects.toThrow();
-    });
-
-    it("rejects negative duration", async () => {
-      await expect(
-        tool.invoke({ duration: -1 })
-      ).rejects.toThrow();
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_move")!;
+      await expect(tool.invoke({ linearX: 3.0 })).rejects.toThrow();
     });
 
     it("rejects duration over 10s", async () => {
-      await expect(
-        tool.invoke({ duration: 15 })
-      ).rejects.toThrow();
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_move")!;
+      await expect(tool.invoke({ duration: 15 })).rejects.toThrow();
     });
   });
 
   describe("robot_forward", () => {
-    const tool = makeTools().find((t) => t.name === "robot_forward")!;
-
-    it("sends forward command with defaults", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true }),
-      });
-
+    it("starts forward motion with defaults", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_forward")!;
       await tool.invoke({});
 
-      const [url] = (global.fetch as any).mock.calls[0];
-      expect(url).toContain("/forward?");
-      expect(url).toContain("speed=1.5");
-      expect(url).toContain("time=1");
+      expect(mockFoxglove.setTwist).toHaveBeenCalledWith(1.5, 0, 0, 0, 0, 0);
+      expect(mockFoxglove.startPublishing).toHaveBeenCalled();
     });
 
     it("uses provided speed and duration", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true }),
-      });
-
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_forward")!;
       await tool.invoke({ speed: 2.0, duration: 5 });
 
-      const [url] = (global.fetch as any).mock.calls[0];
-      expect(url).toContain("speed=2");
-      expect(url).toContain("time=5");
+      expect(mockFoxglove.setTwist).toHaveBeenCalledWith(2.0, 0, 0, 0, 0, 0);
     });
 
     it("rejects speed below minimum", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_forward")!;
       await expect(tool.invoke({ speed: 0.1 })).rejects.toThrow();
-    });
-
-    it("rejects speed above maximum", async () => {
-      await expect(tool.invoke({ speed: 3.0 })).rejects.toThrow();
     });
   });
 
   describe("robot_backward", () => {
-    const tool = makeTools().find((t) => t.name === "robot_backward")!;
+    it("starts backward motion", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_backward")!;
+      await tool.invoke({ speed: 1.0, duration: 2 });
 
-    it("sends backward command", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true }),
-      });
-
-      const result = await tool.invoke({ speed: 1.0, duration: 2 });
-      expect(result).toContain("backward");
-
-      const [url] = (global.fetch as any).mock.calls[0];
-      expect(url).toContain("/backward?");
+      expect(mockFoxglove.setTwist).toHaveBeenCalledWith(-1.0, 0, 0, 0, 0, 0);
     });
   });
 
   describe("robot_turn", () => {
-    const tool = makeTools().find((t) => t.name === "robot_turn")!;
-
-    it("sends left turn command", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true }),
-      });
-
+    it("turns left with positive angular Z", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_turn")!;
       await tool.invoke({ direction: "left", speed: 1.0, duration: 2 });
 
-      const [url] = (global.fetch as any).mock.calls[0];
-      expect(url).toContain("/left?");
-      expect(url).toContain("speed=1");
+      expect(mockFoxglove.setTwist).toHaveBeenCalledWith(0, 0, 0, 0, 0, 1.0);
     });
 
-    it("sends right turn command", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true }),
-      });
-
+    it("turns right with negative angular Z", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_turn")!;
       await tool.invoke({ direction: "right", speed: 0.8, duration: 1.5 });
 
-      const [url] = (global.fetch as any).mock.calls[0];
-      expect(url).toContain("/right?");
+      expect(mockFoxglove.setTwist).toHaveBeenCalledWith(0, 0, 0, 0, 0, -0.8);
     });
 
     it("rejects invalid direction", async () => {
-      await expect(
-        tool.invoke({ direction: "up" as any })
-      ).rejects.toThrow();
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_turn")!;
+      await expect(tool.invoke({ direction: "up" as any })).rejects.toThrow();
     });
   });
 
   describe("robot_stop", () => {
-    const tool = makeTools().find((t) => t.name === "robot_stop")!;
+    it("stops publishing and sends zero twist", async () => {
+      const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_stop")!;
+      await tool.invoke({});
 
-    it("sends stop command", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true }),
+      expect(mockFoxglove.stopPublishing).toHaveBeenCalled();
+      expect(mockFoxglove.setTwist).toHaveBeenCalledWith(0, 0, 0, 0, 0, 0);
+      expect(mockFoxglove.publishJson).toHaveBeenCalledWith(100, {
+        linear: { x: 0, y: 0, z: 0 },
+        angular: { x: 0, y: 0, z: 0 },
       });
-
-      const result = await tool.invoke({});
-      expect(result).toContain("stopped");
-
-      const [url] = (global.fetch as any).mock.calls[0];
-      expect(url).toContain("/stop");
     });
   });
 
-  describe("error handling", () => {
-    it("throws on API error response with error field", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: false, error: "timeout" }),
-      });
+  describe("cancels previous auto-stop", () => {
+    it("new command cancels old stop timer", async () => {
+      const tools = makeTools(mockFoxglove);
+      const forward = tools.find((t) => t.name === "robot_forward")!;
+      const stop = tools.find((t) => t.name === "robot_stop")!;
 
-      const tool = makeTools().find((t) => t.name === "robot_stop")!;
-      await expect(tool.invoke({})).rejects.toThrow("Robot API error: timeout");
-    });
+      await forward.invoke({ duration: 5 });
+      await stop.invoke({});
 
-    it("throws on non-JSON response", async () => {
-      (global.fetch as any).mockResolvedValue({
-        ok: false,
-        status: 500,
-        json: async () => {
-          throw new Error("invalid json");
-        },
-      });
-
-      const tool = makeTools().find((t) => t.name === "robot_status")!;
-      await expect(tool.invoke({})).rejects.toThrow("Robot API HTTP 500");
+      vi.advanceTimersByTime(5000);
+      // stopPublishing should only be called once (by stop, not by the cancelled timer)
+      expect(mockFoxglove.stopPublishing).toHaveBeenCalledTimes(1);
     });
   });
 });

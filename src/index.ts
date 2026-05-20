@@ -6,6 +6,7 @@ import { loadAppConfig } from "./config.js";
 import { createTools } from "./tools/index.js";
 import { RosbridgeClient } from "./tools/ros2.js";
 import { SmartThingsClient } from "./tools/smartthings.js";
+import { FoxgloveClient } from "./foxglove/client.js";
 import type { ChatEventOut } from "./types.js";
 import { ChatRequestSchema, DeviceEventRequestSchema } from "./agent/v2/state.js";
 import { DEFAULT_SESSION_ID } from "./session.js";
@@ -22,9 +23,15 @@ const appConfig = loadAppConfig();
  * 数据流（简化）：
  * HTTP /api/chat -> SmartAgent -> (LangGraph StateGraph) -> tools(smartthings_* / ros2_*) -> SSE -> Web UI
  */
+const foxgloveClient = new FoxgloveClient(appConfig.env.FOXGLOVE_URL);
+foxgloveClient.connect().catch((err) => {
+  log.error("start", "Foxglove connection failed:", err);
+});
+
 const tools = createTools({
   smartThings: new SmartThingsClient(),
-  rosbridge: new RosbridgeClient(appConfig.env.ROSBRIDGE_URL)
+  rosbridge: new RosbridgeClient(appConfig.env.ROSBRIDGE_URL),
+  foxglove: foxgloveClient
 });
 
 const agent = new SmartAgent({
@@ -241,9 +248,10 @@ app.listen(appConfig.env.PORT, () => {
   log.info("start", `Smart Agent web chat is running at http://localhost:${appConfig.env.PORT}`);
 });
 
-// 优雅关闭：断开 Slack WebSocket，避免孤立连接导致反复重连
+// 优雅关闭：断开 Slack WebSocket 和 Foxglove，避免孤立连接导致反复重连
 function gracefulShutdown(signal: string) {
   log.info("shutdown", `received ${signal}, stopping...`);
+  foxgloveClient.disconnect();
   stopSlack()
     .then(() => log.info("shutdown", "Slack app stopped"))
     .catch((err) => log.error("shutdown", "Slack stop failed:", err))

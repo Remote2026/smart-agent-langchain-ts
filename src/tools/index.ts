@@ -4,12 +4,14 @@ import { RosbridgeClient } from "./ros2.js";
 import { SmartThingsClient } from "./smartthings.js";
 import { refreshAndSaveTokens } from "./smartthings-auth.js";
 import { createRobotTools } from "./robot.js";
+import type { FoxgloveClient } from "../foxglove/client.js";
 
 export function createTools(options: {
   smartThings: SmartThingsClient;
   rosbridge: RosbridgeClient;
+  foxglove: FoxgloveClient;
 }) {
-  const { smartThings, rosbridge } = options;
+  const { smartThings, rosbridge, foxglove } = options;
   const getDeviceStatusInput = z.object({
     deviceId: z.string().min(1).describe("SmartThings device ID")
   });
@@ -113,6 +115,6 @@ export function createTools(options: {
         }
       }
     }),
-    ...createRobotTools(),
+    ...createRobotTools(foxglove),
   ];
 }
