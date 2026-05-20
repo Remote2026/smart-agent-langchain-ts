@@ -1,6 +1,5 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { RosbridgeClient } from "./ros2.js";
 import { SmartThingsClient } from "./smartthings.js";
 import { refreshAndSaveTokens } from "./smartthings-auth.js";
 import { createRobotTools } from "./robot.js";
@@ -8,10 +7,9 @@ import type { FoxgloveClient } from "../foxglove/client.js";
 
 export function createTools(options: {
   smartThings: SmartThingsClient;
-  rosbridge: RosbridgeClient;
   foxglove: FoxgloveClient;
 }) {
-  const { smartThings, rosbridge, foxglove } = options;
+  const { smartThings, foxglove } = options;
   const getDeviceStatusInput = z.object({
     deviceId: z.string().min(1).describe("SmartThings device ID")
   });
@@ -22,13 +20,6 @@ export function createTools(options: {
   const setLevelInput = z.object({
     deviceId: z.string().min(1),
     level: z.number().int().min(0).max(100)
-  });
-  const getParamInput = z.object({
-    node: z.string().min(1).describe("ROS2 node name"),
-    name: z.string().min(1).describe("ROS2 parameter name")
-  });
-  const setParamInput = getParamInput.extend({
-    value: z.unknown().describe("JSON-serializable parameter value")
   });
   return [
     new DynamicStructuredTool({
@@ -63,30 +54,6 @@ export function createTools(options: {
         const { deviceId, level } = setLevelInput.parse(input);
         return JSON.stringify(await smartThings.setLevel(deviceId, level));
       }
-    }),
-    new DynamicStructuredTool({
-      name: "ros2_get_param",
-      description: "Get a ROS2 parameter through rosbridge rosapi.",
-      schema: getParamInput,
-      func: async (input) => {
-        const { node, name } = getParamInput.parse(input);
-        return JSON.stringify(await rosbridge.getParam(node, name));
-      }
-    }),
-    new DynamicStructuredTool({
-      name: "ros2_set_param",
-      description: "Set a ROS2 parameter through rosbridge rosapi.",
-      schema: setParamInput,
-      func: async (input) => {
-        const { node, name, value } = setParamInput.parse(input);
-        return JSON.stringify(await rosbridge.setParam(node, name, value));
-      }
-    }),
-    new DynamicStructuredTool({
-      name: "ros2_drive_robot_close_fridge_door",
-      description: "Drive the robot to close the fridge door.",
-      schema: z.object({}),
-      func: async () => JSON.stringify(await rosbridge.driveRobotCloseFridgeDoor())
     }),
     new DynamicStructuredTool({
       name: "smartthings_refresh_token",

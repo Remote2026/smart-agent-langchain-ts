@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { SmartAgent } from "./agent/agent.js";
 import { loadAppConfig } from "./config.js";
 import { createTools } from "./tools/index.js";
-import { RosbridgeClient } from "./tools/ros2.js";
 import { SmartThingsClient } from "./tools/smartthings.js";
 import { FoxgloveClient } from "./foxglove/client.js";
 import type { ChatEventOut } from "./types.js";
@@ -30,7 +29,6 @@ foxgloveClient.connect().catch((err) => {
 
 const tools = createTools({
   smartThings: new SmartThingsClient(),
-  rosbridge: new RosbridgeClient(appConfig.env.ROSBRIDGE_URL),
   foxglove: foxgloveClient
 });
 
