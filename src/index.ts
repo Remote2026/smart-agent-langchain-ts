@@ -7,11 +7,9 @@ import { createTools } from "./tools/index.js";
 import { RosbridgeClient } from "./tools/ros2.js";
 import { SmartThingsClient } from "./tools/smartthings.js";
 import type { ChatEventOut } from "./types.js";
-import { ChatRequestSchema, DeviceEventRequestSchema, type InputMessage } from "./agent/v2/state.js";
+import { ChatRequestSchema, DeviceEventRequestSchema } from "./agent/v2/state.js";
 import { DEFAULT_SESSION_ID } from "./session.js";
-import { startSlackApp } from "./slack/app.js";
-import { createSlackNotifier } from "./slack/notifier.js";
-import type { SlackNotifier } from "./slack/notifier.js";
+import { startSlackIntegration, maybeMirrorToSlack, webMessageSlackText } from "./slack/index.js";
 import { createLogger } from "./utils/logger.js";
 
 const log = createLogger("index.ts");
@@ -56,34 +54,15 @@ function broadcastSse(event: ChatEventOut): void {
   }
 }
 
-// ---- Slack 相关（可选，SLACK_ENABLED=true 时启用） ----
+// -------------------------------------------------
+// Slack 集成（可选，在 listen 前初始化）
+// -------------------------------------------------
 
-import type { App as SlackApp } from "@slack/bolt";
-let slackApp: SlackApp | undefined;       // Bolt App 实例，供 SIGINT 优雅关闭
-let slackNotifier: SlackNotifier | undefined;
-
-// 防回环第1层：只有 channel === "web" 的 final/error 才 mirror 到 Slack
-// Slack 触发的事件 (channel="slack") 绝不走进 mirror，避免重复发回 Slack
-function maybeMirrorToSlack(event: ChatEventOut, threadTs?: string): void {
-  if (!slackNotifier) return;
-  if (event.channel !== "web") return;
-  if (event.type === "final") {
-    slackNotifier.mirrorWebFinal(event.payload.text, threadTs);
-  }
-  if (event.type === "error") {
-    slackNotifier.mirrorWebError(event.payload.message, threadTs);
-  }
-}
-
-/** 构造 Web→Slack mirror 文案：
- *  - kind="text" → "Web: {text}"
- *  - kind="image" → "Web: [图片] {text}" 或 "Web: [图片]"（无文字时） */
-function webMessageSlackText(msg: InputMessage): string {
-  if (msg.kind === "text") return `Web: ${msg.text}`;
-  return msg.text
-    ? `Web: [图片] ${msg.text}`
-    : `Web: [图片]`;
-}
+const { notifier: slackNotifier, stop: stopSlack } = await startSlackIntegration({
+  agent,
+  broadcastSse,
+  env: appConfig.env
+});
 
 // -------------------------------------------------
 // Routes
@@ -172,7 +151,7 @@ app.post("/api/chat", async (request, response) => {
   const emit = (event: ChatEventOut) => {
     response.write(`event: ${event.type}\n`);
     response.write(`data: ${JSON.stringify(event)}\n\n`);
-    maybeMirrorToSlack(event, mirrorThreadTs); // Web→Slack mirror 旁路
+    maybeMirrorToSlack(slackNotifier, event, mirrorThreadTs); // Web→Slack mirror 旁路
   };
 
   // Web → Slack mirror：先发用户消息到 Slack 默认频道，记录 ts 作为后续 thread 根
@@ -218,7 +197,7 @@ app.post("/api/device-event", async (request, response) => {
 
   const emit = (event: ChatEventOut) => {
     broadcastSse(event);
-    maybeMirrorToSlack(event, mirrorThreadTs);
+    maybeMirrorToSlack(slackNotifier, event, mirrorThreadTs);
   };
 
   // 设备事件同步到 Slack（如开启 mirror）
@@ -260,38 +239,17 @@ app.post("/api/device-event", async (request, response) => {
 
 app.listen(appConfig.env.PORT, () => {
   log.info("start", `Smart Agent web chat is running at http://localhost:${appConfig.env.PORT}`);
-
-  // Slack 为可选功能：SLACK_ENABLED=true 时才启动 Socket Mode
-  if (appConfig.env.SLACK_ENABLED) {
-    startSlackApp({ agent, broadcastSse }).then((app) => {
-      slackApp = app;
-      // Notifier 在 Slack App 启动后初始化（需要 app.client）
-      if (appConfig.env.SLACK_MIRROR_WEB_MESSAGES && appConfig.env.SLACK_DEFAULT_CHANNEL_ID) {
-        slackNotifier = createSlackNotifier(
-          app.client,
-          appConfig.env.SLACK_DEFAULT_CHANNEL_ID
-        );
-        log.info("start", "Web->Slack mirror enabled");
-      }
-    }).catch((err) => {
-      log.error("start", "Failed to start Slack App:", err);
-    });
-  }
 });
 
 // 优雅关闭：断开 Slack WebSocket，避免孤立连接导致反复重连
 function gracefulShutdown(signal: string) {
-  log.info("shutdown", `received ${signal}, stopping Slack app...`);
-  if (slackApp) {
-    slackApp.stop()
-      .then(() => log.info("shutdown", "Slack app stopped"))
-      .catch((err) => log.error("shutdown", "Slack stop failed:", err))
-      .finally(() => process.exit(0));
-    // 强制退出兜底：5 秒后仍未退出则强制终止
-    setTimeout(() => process.exit(1), 5000);
-  } else {
-    process.exit(0);
-  }
+  log.info("shutdown", `received ${signal}, stopping...`);
+  stopSlack()
+    .then(() => log.info("shutdown", "Slack app stopped"))
+    .catch((err) => log.error("shutdown", "Slack stop failed:", err))
+    .finally(() => process.exit(0));
+  // 强制退出兜底：5 秒后仍未退出则强制终止
+  setTimeout(() => process.exit(1), 5000);
 }
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
