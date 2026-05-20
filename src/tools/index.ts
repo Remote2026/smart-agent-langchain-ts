@@ -3,6 +3,7 @@ import { z } from "zod";
 import { RosbridgeClient } from "./ros2.js";
 import { SmartThingsClient } from "./smartthings.js";
 import { refreshAndSaveTokens } from "./smartthings-auth.js";
+import { createRobotTools } from "./robot.js";
 
 export function createTools(options: {
   smartThings: SmartThingsClient;
@@ -111,6 +112,7 @@ export function createTools(options: {
           return JSON.stringify({ error: msg });
         }
       }
-    })
+    }),
+    ...createRobotTools(),
   ];
 }
