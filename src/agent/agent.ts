@@ -159,7 +159,7 @@ export class SmartAgent {
         initialGraphState,
         {
           streamMode: "values",
-          recursionLimit: 12,
+          recursionLimit: 35,
           configurable: { thread_id: input.sessionId }
         }
       );
@@ -235,7 +235,7 @@ export class SmartAgent {
         initialGraphState,
         {
           streamMode: "values",
-          recursionLimit: 12,
+          recursionLimit: 35,
           configurable: { thread_id: input.sessionId }
         }
       );

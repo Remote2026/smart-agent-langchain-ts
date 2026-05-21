@@ -1,7 +1,7 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { AIMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ChatOpenAI } from "@langchain/openai";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import type { GraphEvent } from "../../types.js";
@@ -20,8 +20,14 @@ type Deps = {
 
 // ── 扁平化 GraphState ──────────────────────────────────────────────────
 // 数据流: START → prepare → llm_call ⇄ tool_node → respond → END
-// llm_call 与 tool_node 之间构成 agent 循环（最多 5 轮），LLM 自主决定调用哪些 tool
+// llm_call 与 tool_node 之间构成 agent 循环，LLM 自主决定调用哪些 tool
+// 限制：同一工具最多 3 次，总工具调用最多 10 次，agentLoopCount 兜底 15 轮
 const MAX_HISTORY = 50;
+const MAX_AGENT_LOOPS = 15;
+const MAX_PER_TOOL = 3;
+const MAX_TOTAL_TOOLS = 10;
+
+interface ToolResult { name: string; content: unknown }
 
 const GraphState = Annotation.Root({
   sessionId: Annotation<string>({ reducer: (_, n) => n, default: () => "" }),
@@ -45,6 +51,9 @@ const GraphState = Annotation.Root({
   finalText: Annotation<string | undefined>({ reducer: (_, n) => n }),
   graphEvents: Annotation<GraphEvent[]>({ reducer: (_, n) => n, default: () => [] }),
   agentLoopCount: Annotation<number>({ reducer: (_, n) => n, default: () => 0 }),
+  currentStreakTool: Annotation<string>({ reducer: (_, n) => n, default: () => "" }),
+  toolStreak: Annotation<number>({ reducer: (_, n) => n, default: () => 0 }),
+  totalToolCalls: Annotation<number>({ reducer: (_, n) => n, default: () => 0 }),
 });
 
 type GraphStateType = typeof GraphState.State;
@@ -74,6 +83,9 @@ async function prepareNode(state: GraphStateType, deps: Deps): Promise<Partial<G
     agentLoopCount: 0,
     toolResults: undefined,
     finalText: undefined,
+    currentStreakTool: "",
+    toolStreak: 0,
+    totalToolCalls: 0,
     graphEvents: [...state.graphEvents, ...events]
   };
 }
@@ -143,7 +155,6 @@ async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<Grap
       }));
     }
 
-    interface ToolResult { name: string; content: unknown }
     const prevResults = Array.isArray(state.toolResults) ? state.toolResults as ToolResult[] : [];
     const newResults: ToolResult[] = toolMessages.map(m => ({ name: (m as any).name ?? "unknown", content: m.content }));
 
@@ -164,10 +175,27 @@ async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<Grap
       }
     }
 
+    // 更新工具调用 streak 和总次数
+    const lastToolName = toolMessages.length > 0
+      ? (toolMessages[toolMessages.length - 1] as any).name ?? ""
+      : "";
+    let currentStreakTool = state.currentStreakTool || "";
+    let toolStreak = state.toolStreak || 0;
+    if (lastToolName === currentStreakTool && lastToolName) {
+      toolStreak += 1;
+    } else if (lastToolName) {
+      currentStreakTool = lastToolName;
+      toolStreak = 1;
+    }
+    const totalToolCalls = (state.totalToolCalls || 0) + toolMessages.length;
+
     return {
       messages: toolMessages,
       toolResults: [...prevResults, ...newResults],
       finalText: directText,
+      currentStreakTool,
+      toolStreak,
+      totalToolCalls,
       graphEvents: [...state.graphEvents, ...events]
     };
   } catch (error) {
@@ -217,10 +245,22 @@ export function buildV2Graph(deps: Deps) {
   graph.addEdge(START, "prepare");
   graph.addEdge("prepare", "llm_call");
 
-  // llm_call 之后：有 tool_calls → 执行 tool；无 → 直接回复
+  // llm_call 之后：
+  // - 有 tool_calls 但同一工具已连续 3 次 → 跳过 tool_node，直接 respond
+  // - 有 tool_calls 但总调用已达 10 次 → 跳过 tool_node，直接 respond
+  // - 有 tool_calls 且无超限 → 执行 tool_node
+  // - 无 tool_calls → 直接 respond
   graph.addConditionalEdges("llm_call", (s: GraphStateType) => {
     const lastMsg = s.messages[s.messages.length - 1];
     if (lastMsg instanceof AIMessage && lastMsg.tool_calls?.length) {
+      for (const tc of lastMsg.tool_calls) {
+        if (tc.name === s.currentStreakTool && s.toolStreak >= 3) {
+          return "respond";
+        }
+      }
+      if (s.totalToolCalls >= 10) {
+        return "respond";
+      }
       return "tool_node";
     }
     return "respond";
@@ -228,8 +268,9 @@ export function buildV2Graph(deps: Deps) {
 
   // tool_node 之后：
   // - 如果调用的工具有 returnDirect，直接结束，不再让 LLM 加工
-  // - 未达上限 → 继续 agent 循环
-  // - 已达上限 → 强制退出
+  // - agentLoopCount 超过 MAX_AGENT_LOOPS → 结束
+  // - 否则继续 agent 循环
+  // （同一工具连续3次和总调用10次的限制已在 llm_call 条件边拦截）
   graph.addConditionalEdges("tool_node", (s: GraphStateType) => {
     const lastAi = [...s.messages].reverse().find(
       m => m instanceof AIMessage && m.tool_calls && m.tool_calls.length > 0
@@ -244,7 +285,7 @@ export function buildV2Graph(deps: Deps) {
       }
     }
 
-    if (s.agentLoopCount < 5) {
+    if (s.agentLoopCount < MAX_AGENT_LOOPS) {
       return "llm_call";
     }
     return "respond";
