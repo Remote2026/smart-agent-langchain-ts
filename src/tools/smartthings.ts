@@ -46,13 +46,15 @@ export class SmartThingsClient {
     };
   }
 
-  async setSwitch(_deviceId: string, _on: boolean): Promise<{ ok: true }> {
-    log.warn("setSwitch", "not yet implemented (pending CLI integration)");
+  setSwitch(deviceId: string, on: boolean): { ok: true } {
+    const cmd = `smartthings devices:commands ${deviceId} 'switch:${on ? "on" : "off"}'`;
+    execSync(this.cliArgs(cmd), { encoding: "utf-8", timeout: 30000 });
     return { ok: true };
   }
 
-  async setLevel(_deviceId: string, _level: number): Promise<{ ok: true }> {
-    log.warn("setLevel", "not yet implemented (pending CLI integration)");
+  setLevel(deviceId: string, level: number): { ok: true } {
+    const cmd = `smartthings devices:commands ${deviceId} 'switchLevel:setLevel(${level})'`;
+    execSync(this.cliArgs(cmd), { encoding: "utf-8", timeout: 30000 });
     return { ok: true };
   }
 

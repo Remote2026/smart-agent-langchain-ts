@@ -36,7 +36,6 @@ export function createTools(options: {
       name: "smartthings_list_devices",
       description: "List SmartThings devices available via SmartThings CLI. Returns a markdown table with device ID, name, label and type.",
       schema: z.object({}),
-      returnDirect: true,
       func: async () => {
         const { devices } = await smartThings.listDevices();
         return formatDeviceList(devices);
