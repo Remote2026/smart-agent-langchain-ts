@@ -61,7 +61,8 @@ export async function startSlackApp(options: {
   app.event("message" as any, async ({ event }: any) => {
     log.info("message", "received:", { channel_type: event.channel_type, subtype: (event as any).subtype, text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
 
-    if ((event as any).subtype) {
+    // file_share（图片消息）放行给 transport 处理，其他 subtype 跳过
+    if ((event as any).subtype && (event as any).subtype !== "file_share") {
       log.info("message", "skipped: subtype=", (event as any).subtype);
       return;
     }
@@ -77,7 +78,8 @@ export async function startSlackApp(options: {
       ts: event.ts,
       thread_ts: (event as any).thread_ts,
       bot_id: (event as any).bot_id,
-      subtype: (event as any).subtype
+      subtype: (event as any).subtype,
+      files: (event as any).files
     });
   });
 

@@ -230,7 +230,7 @@ function appendMessage(kind, role, content) {
 
   const contentEl = document.createElement("div");
   contentEl.className = "content";
-  contentEl.textContent = content;
+  contentEl.innerHTML = marked.parse(content);
 
   article.append(roleEl, contentEl);
   messagesEl.append(article);

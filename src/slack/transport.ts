@@ -85,6 +85,7 @@ export function createSlackTransport(options: {
     thread_ts?: string;
     bot_id?: string;
     subtype?: string;
+    files?: Array<{ url_private: string; mimetype: string }>;
   }) {
     log.info("handleDirectMessage", { bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 80) });
     if (event.bot_id) { log.info("handleDirectMessage", "skipped: bot_id"); return; }

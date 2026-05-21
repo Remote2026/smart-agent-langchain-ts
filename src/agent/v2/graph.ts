@@ -1,7 +1,7 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { AIMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ChatOpenAI } from "@langchain/openai";
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint";
 import type { GraphEvent } from "../../types.js";
@@ -146,9 +146,28 @@ async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<Grap
     interface ToolResult { name: string; content: unknown }
     const prevResults = Array.isArray(state.toolResults) ? state.toolResults as ToolResult[] : [];
     const newResults: ToolResult[] = toolMessages.map(m => ({ name: (m as any).name ?? "unknown", content: m.content }));
+
+    // returnDirect：如果最后调用的工具有 returnDirect，直接把输出内容写入 finalText
+    let directText: string | undefined;
+    const lastAi = [...state.messages].reverse().find(
+      m => m instanceof AIMessage && m.tool_calls && m.tool_calls.length > 0
+    ) as AIMessage | undefined;
+    if (lastAi?.tool_calls) {
+      for (const tc of lastAi.tool_calls) {
+        const tool = deps.tools.find(t => t.name === tc.name);
+        if (tool && (tool as any).returnDirect) {
+          const tm = toolMessages.find(m => (m as any).name === tc.name);
+          if (tm && typeof tm.content === "string") {
+            directText = tm.content.trim();
+          }
+        }
+      }
+    }
+
     return {
       messages: toolMessages,
       toolResults: [...prevResults, ...newResults],
+      finalText: directText,
       graphEvents: [...state.graphEvents, ...events]
     };
   } catch (error) {
@@ -166,11 +185,16 @@ async function respondNode(state: GraphStateType): Promise<Partial<GraphStateTyp
   const events: GraphEvent[] = [];
   addEvent(events, nodeEvent({ node: "respond", phase: "start", summary: "extracting final response" }));
 
-  const lastAi = [...state.messages].reverse().find(
-    m => m instanceof AIMessage && !(m.tool_calls && m.tool_calls.length > 0)
-  ) as AIMessage | undefined;
+  // returnDirect 优先：tool_node 已把工具输出写入 finalText
+  let text = state.finalText ?? "";
 
-  const text = lastAi && typeof lastAi.content === "string" ? lastAi.content.trim() : (state.finalText ?? "");
+  // 正常路径：取最后一条不含 tool_calls 的 AIMessage
+  if (!text) {
+    const lastAi = [...state.messages].reverse().find(
+      m => m instanceof AIMessage && !(m.tool_calls && m.tool_calls.length > 0)
+    ) as AIMessage | undefined;
+    text = lastAi && typeof lastAi.content === "string" ? lastAi.content.trim() : "";
+  }
 
   if (text) {
     addEvent(events, nodeEvent({ node: "respond", phase: "end", summary: `ok len=${text.length}` }));
@@ -202,8 +226,24 @@ export function buildV2Graph(deps: Deps) {
     return "respond";
   });
 
-  // tool_node 之后：未达上限 → 继续 agent 循环；已达上限 → 强制退出
+  // tool_node 之后：
+  // - 如果调用的工具有 returnDirect，直接结束，不再让 LLM 加工
+  // - 未达上限 → 继续 agent 循环
+  // - 已达上限 → 强制退出
   graph.addConditionalEdges("tool_node", (s: GraphStateType) => {
+    const lastAi = [...s.messages].reverse().find(
+      m => m instanceof AIMessage && m.tool_calls && m.tool_calls.length > 0
+    ) as AIMessage | undefined;
+
+    if (lastAi?.tool_calls) {
+      for (const tc of lastAi.tool_calls) {
+        const tool = deps.tools.find(t => t.name === tc.name);
+        if (tool && (tool as any).returnDirect) {
+          return "respond";
+        }
+      }
+    }
+
     if (s.agentLoopCount < 5) {
       return "llm_call";
     }

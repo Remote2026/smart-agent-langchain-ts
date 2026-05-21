@@ -1,9 +1,19 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-import { SmartThingsClient } from "./smartthings.js";
+import { SmartThingsClient, type SmartThingsDevice } from "./smartthings.js";
 import { refreshAndSaveTokens } from "./smartthings-auth.js";
 import { createRobotTools } from "./robot.js";
 import type { FoxgloveClient } from "../foxglove/client.js";
+
+function formatDeviceList(devices: SmartThingsDevice[]): string {
+  if (devices.length === 0) return "未找到任何 SmartThings 设备。";
+  const headers = "| 设备 ID | 名称 | 标签 | 类型 |";
+  const sep = "|---|---|---|---|";
+  const rows = devices.map(
+    (d) => `| \`${d.id}\` | ${d.name} | ${d.label || "-"} | ${d.type || "-"} |`
+  );
+  return [headers, sep, ...rows].join("\n");
+}
 
 export function createTools(options: {
   smartThings: SmartThingsClient;
@@ -24,9 +34,13 @@ export function createTools(options: {
   return [
     new DynamicStructuredTool({
       name: "smartthings_list_devices",
-      description: "List SmartThings devices available via SmartThings CLI. get device id, name, label and type and etc.",
+      description: "List SmartThings devices available via SmartThings CLI. Returns a markdown table with device ID, name, label and type.",
       schema: z.object({}),
-      func: async () => JSON.stringify(await smartThings.listDevices())
+      returnDirect: true,
+      func: async () => {
+        const { devices } = await smartThings.listDevices();
+        return formatDeviceList(devices);
+      }
     }),
     new DynamicStructuredTool({
       name: "smartthings_get_device_status",

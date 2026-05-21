@@ -8,6 +8,7 @@ import type { InputMessage } from "./v2/state.js";
 import { graphEventToSse } from "./v2/events.js";
 import { buildV2Graph } from "./v2/graph.js";
 import { loadAppConfig } from "../config.js";
+import { compressImage } from "../utils/image.js";
 import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("agent.ts");
@@ -22,6 +23,11 @@ type EmitEvent = (event: ChatEventOut) => void;
 function createSystemPrompt(): string {
   return `You are a local smart-home and ROS2 assistant with vision capability.
 You can have normal daily conversation, analyze images (e.g., plant health, device photos), and control SmartThings and ROS2 through tools.
+
+System boundaries:
+- SmartThings tools (smartthings_*) control home IoT devices ONLY. These are NEVER robots.
+- ROS2 tools (ros2_*) control the physical robot ONLY — chassis movement, navigation, parameters.
+- The two systems are completely independent. A "Robot" or "Vacuum" listed in SmartThings is a home appliance, not the ROS2 robot.
 
 Rules:
 - When the user sends an image, analyze it and answer in the same language as the user.
@@ -48,11 +54,12 @@ function summarizeInput(msg: InputMessage): unknown {
   };
 }
 
-export function buildHumanMessage(msg: InputMessage): HumanMessage {
+export async function buildHumanMessage(msg: InputMessage): Promise<HumanMessage> {
   if (msg.kind === "text") {
     return new HumanMessage(msg.text);
   }
-  // kind: "image" — 构造多模态 content 数组（text 在前，image_url 在后）
+  // kind: "image" — 先压缩再构造多模态 content
+  const compressed = await compressImage(msg.imageBase64, msg.mimeType);
   const parts: Array<
     | { type: "text"; text: string }
     | { type: "image_url"; image_url: { url: string } }
@@ -62,7 +69,7 @@ export function buildHumanMessage(msg: InputMessage): HumanMessage {
   }
   parts.push({
     type: "image_url",
-    image_url: { url: `data:${msg.mimeType};base64,${msg.imageBase64}` }
+    image_url: { url: `data:${compressed.mimeType};base64,${compressed.base64}` }
   });
   return new HumanMessage({ content: parts });
 }
@@ -145,7 +152,7 @@ export class SmartAgent {
       const initialGraphState = {
         sessionId: input.sessionId,
         input: input.message,
-        messages: [buildHumanMessage(input.message)], // text/image 统一入口
+        messages: [await buildHumanMessage(input.message)], // text/image 统一入口
         graphEvents: []
       };
 
@@ -227,7 +234,7 @@ export class SmartAgent {
       const initialGraphState = {
         sessionId: input.sessionId,
         input: input.message,
-        messages: [buildHumanMessage(input.message)], // 设备事件始终为 kind:"text"，走纯文本分支
+        messages: [await buildHumanMessage(input.message)], // 设备事件始终为 kind:"text"，走纯文本分支
         graphEvents: []
       };
 
