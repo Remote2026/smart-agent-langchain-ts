@@ -139,7 +139,7 @@ async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<Grap
   const lastMsg = state.messages[state.messages.length - 1];
   if (lastMsg instanceof AIMessage && lastMsg.tool_calls) {
     for (const tc of lastMsg.tool_calls) {
-      addEvent(events, toolEvent({ name: tc.name, phase: "start", summary: tc.name, data: tc.args }));
+      addEvent(events, toolEvent({ name: tc.name, phase: "start", summary: tc.name, data: tc.args, toolCallId: tc.id }));
     }
   }
 
@@ -200,7 +200,7 @@ async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<Grap
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    addEvent(events, toolEvent({ name: "tool_node", phase: "error", summary: msg }));
+    addEvent(events, toolEvent({ name: "tool_node", phase: "error", summary: msg, toolCallId: "batch" }));
     return { graphEvents: [...state.graphEvents, ...events] };
   }
 }

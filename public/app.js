@@ -207,10 +207,22 @@ function handleServerEvent(event) {
   }
 
   if (event.type === "tool") {
-    // tool 事件用于渲染 Tool Events（详细日志）
     appendToolEvent(event.payload);
+    const tcId = event.payload.toolCallId || "";
     if (event.payload.status === "executing") {
-      appendMessage("tool", "Tool Call", `${event.payload.name}\n${formatJson(event.payload.input)}`);
+      const text = `${event.payload.name}\n${formatJson(event.payload.input)}`;
+      appendMessage("tool", "Tool Call", text, tcId);
+    } else {
+      // ok / error：更新已有的工具气泡
+      const existing = messagesEl.querySelector(`[data-tool-call-id="${tcId}"]`);
+      if (existing) {
+        const contentEl = existing.querySelector(".content");
+        const status = event.payload.status === "ok" ? "✓" : "✗";
+        const output = typeof event.payload.output === "string"
+          ? event.payload.output
+          : JSON.stringify(event.payload.output);
+        contentEl.innerHTML = marked.parse(`${event.payload.name} ${status}\n\n\`\`\`\n${output.slice(0, 300)}\n\`\`\``);
+      }
     }
     return;
   }
@@ -220,9 +232,12 @@ function handleServerEvent(event) {
   }
 }
 
-function appendMessage(kind, role, content) {
+function appendMessage(kind, role, content, toolCallId) {
   const article = document.createElement("article");
   article.className = `message ${kind}`;
+  if (toolCallId) {
+    article.dataset.toolCallId = toolCallId;
+  }
 
   const roleEl = document.createElement("div");
   roleEl.className = "role";

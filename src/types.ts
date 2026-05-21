@@ -20,7 +20,7 @@ export type GraphEvent =
     source?: "node" | "llm";
     /**
      * 事件产生位置（便于落盘日志定位代码路径）。
-     * 注意：这里是“业务级位置”，不是 JS stack trace。
+     * 注意：这里是"业务级位置"，不是 JS stack trace。
      */
     origin?: { file: string; fn: string };
     data?: unknown;
@@ -31,15 +31,12 @@ export type GraphEvent =
     name: string;
     phase: "start" | "end" | "error";
     summary: string;
-    /**
-     * 数据来源标记：
-     * - tool：外部工具调用（SmartThings/ROS2 等）
-     * - llm：把 LLM 调用当作一种“可观测步骤”记录（不等同于外部工具）
-     */
     source?: "tool" | "llm";
     origin?: { file: string; fn: string };
     data?: unknown;
     at: string;
+    /** tool_call_id，用于前端匹配 start/end 更新同一气泡 */
+    toolCallId?: string;
   };
 
 export type ChatEventOut =
@@ -50,7 +47,7 @@ export type ChatEventOut =
     payload: { status: "thinking" | "done" | "device_event_received" };
   }
   /**
-   * V2：node 事件用于前端展示“Graph Steps”（每个图节点的进度）。
+   * V2：node 事件用于前端展示"Graph Steps"（每个图节点的进度）。
    */
   | {
     sessionId: string;
@@ -64,6 +61,7 @@ export type ChatEventOut =
       input?: unknown;
       output?: unknown;
       error?: string;
+      toolCallId?: string;
     };
   }
   | {

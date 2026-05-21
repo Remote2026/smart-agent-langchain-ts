@@ -40,6 +40,7 @@ export function toolEvent(args: {
   source?: "tool" | "llm";
   origin?: { file: string; fn: string };
   data?: unknown;
+  toolCallId?: string;
 }): GraphEvent {
   return {
     type: "tool",
@@ -49,7 +50,8 @@ export function toolEvent(args: {
     source: args.source ?? "tool",
     origin: args.origin,
     data: args.data,
-    at: nowIso()
+    at: nowIso(),
+    toolCallId: args.toolCallId
   };
 }
 
@@ -83,7 +85,7 @@ export function graphEventToSse(sessionId: string, event: GraphEvent, channel: C
       sessionId,
       channel,
       type: "tool",
-      payload: { name: event.name, status: "executing", source: event.source, origin: event.origin, input: event.data }
+      payload: { name: event.name, status: "executing", source: event.source, origin: event.origin, input: event.data, toolCallId: event.toolCallId }
     };
   }
 
@@ -98,7 +100,8 @@ export function graphEventToSse(sessionId: string, event: GraphEvent, channel: C
         source: event.source,
         origin: event.origin,
         error: event.summary,
-        output: event.data
+        output: event.data,
+        toolCallId: event.toolCallId
       }
     };
   }
@@ -107,6 +110,6 @@ export function graphEventToSse(sessionId: string, event: GraphEvent, channel: C
     sessionId,
     channel,
     type: "tool",
-    payload: { name: event.name, status: "ok", source: event.source, origin: event.origin, output: event.data }
+    payload: { name: event.name, status: "ok", source: event.source, origin: event.origin, output: event.data, toolCallId: event.toolCallId }
   };
 }
