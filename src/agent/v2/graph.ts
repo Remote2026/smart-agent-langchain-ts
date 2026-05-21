@@ -151,7 +151,8 @@ async function toolNode(state: GraphStateType, deps: Deps): Promise<Partial<Grap
       const name = (tm as any).name ?? "unknown";
       addEvent(events, toolEvent({
         name, phase: "end", summary: "ok",
-        data: typeof tm.content === "string" ? tm.content.slice(0, 500) : tm.content
+        data: typeof tm.content === "string" ? tm.content.slice(0, 500) : tm.content,
+        toolCallId: (tm as any).tool_call_id
       }));
     }
 
