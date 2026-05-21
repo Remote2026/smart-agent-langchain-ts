@@ -34,7 +34,7 @@ export function createTools(options: {
   return [
     new DynamicStructuredTool({
       name: "smartthings_list_devices",
-      description: "List SmartThings devices available via SmartThings CLI. Returns a markdown table with device ID, name, label and type.",
+      description: "List SmartThings devices available via SmartThings CLI. Returns a markdown table with device ID, name, label and type. Only call this if you do not already have the device list in the current conversation context.",
       schema: z.object({}),
       func: async () => {
         const { devices } = await smartThings.listDevices();
