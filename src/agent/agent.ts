@@ -93,6 +93,7 @@ export class SmartAgent {
       },
       model: options.model,
       temperature: 0.2,
+      streaming: true,
       ...(appConfig.env.DEEPSEEK_THINKING_MODE === "disabled"
         ? { modelKwargs: { thinking: { type: "disabled" } } }
         : {})
@@ -176,7 +177,7 @@ export class SmartAgent {
           lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
 
           const lastMsg = lastStateMessages?.[lastStateMessages.length - 1];
-          log.info("handleUserMessage", "graph state", { lastMsg, lastFinalText });
+          // log.info("handleUserMessage", "graph state", { lastMsg, lastFinalText });
 
           // 如果 LLM 返回了新的 tool_calls，立即发送 tool:start SSE（不等 tool_node 执行完）
           if (lastMsg && isAIMessage(lastMsg) && lastMsg.tool_calls?.length) {
@@ -211,6 +212,7 @@ export class SmartAgent {
             continue;
           }
           const text = typeof messageChunk.content === "string" ? messageChunk.content : "";
+          // log.info("handleUserMessage", "messages chunk:", JSON.stringify(text), "len:", text.length, "type:", (messageChunk as any).constructor?.name);
           if (text) {
             input.emit({
               sessionId: input.sessionId,
@@ -321,6 +323,7 @@ export class SmartAgent {
             continue;
           }
           const text = typeof messageChunk.content === "string" ? messageChunk.content : "";
+          // log.info("handleDeviceEvent", "messages chunk:", JSON.stringify(text), "len:", text.length, "type:", (messageChunk as any).constructor?.name);
           if (text) {
             input.emit({
               sessionId: input.sessionId,

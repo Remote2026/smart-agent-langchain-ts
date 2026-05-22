@@ -13,7 +13,7 @@ export { startSlackApp } from "./app.js";
 export { createSlackNotifier } from "./notifier.js";
 export { createSlackTransport } from "./transport.js";
 
-/** Mirror Web final/error events to Slack default channel */
+/** Mirror Web token/final/error events to Slack default channel (streaming-aware) */
 export function maybeMirrorToSlack(
   notifier: SlackNotifier | undefined,
   event: ChatEventOut,
@@ -21,11 +21,12 @@ export function maybeMirrorToSlack(
 ): void {
   if (!notifier) return;
   if (event.channel !== "web") return;
-  if (event.type === "final") {
-    notifier.mirrorWebFinal(event.payload.text, threadTs);
-  }
-  if (event.type === "error") {
-    notifier.mirrorWebError(event.payload.message, threadTs);
+  if (event.type === "token") {
+    notifier.streamToken(event.payload.text, threadTs);
+  } else if (event.type === "final") {
+    notifier.streamFinal(event.payload.text, threadTs);
+  } else if (event.type === "error") {
+    notifier.streamError(event.payload.message, threadTs);
   }
 }
 

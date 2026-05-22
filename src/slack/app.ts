@@ -47,7 +47,7 @@ export async function startSlackApp(options: {
   });
 
   app.event("app_mention" as any, async ({ event }: any) => {
-    log.info("app_mention", "received:", { text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
+    // log.info("app_mention", "received:", { text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
     await transport.handleAppMention({
       text: event.text,
       channel: event.channel,
@@ -59,7 +59,7 @@ export async function startSlackApp(options: {
   });
 
   app.event("message" as any, async ({ event }: any) => {
-    log.info("message", "received:", { channel_type: event.channel_type, subtype: (event as any).subtype, text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
+    // log.info("message", "received:", { channel_type: event.channel_type, subtype: (event as any).subtype, text: event.text?.slice(0, 80), channel: event.channel, ts: event.ts });
 
     // file_share（图片消息）放行给 transport 处理，其他 subtype 跳过
     if ((event as any).subtype && (event as any).subtype !== "file_share") {
