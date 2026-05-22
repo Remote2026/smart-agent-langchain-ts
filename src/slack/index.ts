@@ -23,6 +23,8 @@ export function maybeMirrorToSlack(
   if (event.channel !== "web") return;
   if (event.type === "token") {
     notifier.streamToken(event.payload.text, threadTs);
+  } else if (event.type === "tool") {
+    notifier.streamToolStatus(event.payload, threadTs);
   } else if (event.type === "final") {
     notifier.streamFinal(event.payload.text, threadTs);
   } else if (event.type === "error") {

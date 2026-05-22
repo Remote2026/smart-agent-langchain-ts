@@ -34,6 +34,8 @@ export type SlackNotifier = {
   streamFinal(text: string, threadTs?: string): Promise<void>;
   /** 流式：出错时结束流并发送错误消息 */
   streamError(message: string, threadTs?: string): Promise<void>;
+  /** 流式/非流式：发送工具调用状态 */
+  streamToolStatus(payload: { name: string; status: string }, threadTs?: string): void;
 };
 
 export function createSlackNotifier(
@@ -228,6 +230,29 @@ export function createSlackNotifier(
     await mirrorWebError(message, threadTs);
   }
 
+  function streamToolStatus(payload: { name: string; status: string }, threadTs?: string) {
+    if (!threadTs) return;
+    const icon = payload.status === "executing" ? "🔧" : payload.status === "ok" ? "✅" : "❌";
+    const msg = payload.status === "executing"
+      ? `${icon} 正在调用工具: ${payload.name}...`
+      : `${icon} 工具 ${payload.name} ${payload.status === "ok" ? "已完成" : "失败"}`;
+
+    const state = activeStreams.get(threadTs);
+    if (state && state.ts) {
+      client.chat.appendStream({
+        channel: defaultChannelId,
+        ts: state.ts,
+        markdown_text: msg,
+      }).catch(err => log.error("appendStream", "tool status failed:", err));
+    } else {
+      client.chat.postMessage({
+        channel: defaultChannelId,
+        text: msg,
+        thread_ts: threadTs,
+      }).catch(err => log.error("postMessage", "failed:", err));
+    }
+  }
+
   return {
     mirrorWebUserMessage,
     mirrorWebFinal,
@@ -235,5 +260,6 @@ export function createSlackNotifier(
     streamToken,
     streamFinal,
     streamError,
+    streamToolStatus,
   };
 }

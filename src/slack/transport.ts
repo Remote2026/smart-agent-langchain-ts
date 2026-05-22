@@ -326,8 +326,39 @@ export function createSlackTransport(options: {
     // - 全部事件 → broadcastSse（Web UI 可见所有 node/tool/final/error）
     // - channel（@mention）→ Slack thread 流式回复
     // - DM → 直接 postMessage（chat.startStream 强制要求 thread_ts，会创建 thread）
+    function toolStatusText(payload: { name: string; status: string }): string {
+      const { name, status } = payload;
+      if (status === "executing") return `🔧 正在调用工具: ${name}...`;
+      if (status === "ok") return `✅ 工具 ${name} 已完成`;
+      return `❌ 工具 ${name} 失败`;
+    }
+
     const emit = (event: ChatEventOut) => {
       broadcastSse(event);
+
+      if (event.type === "tool") {
+        const msg = toolStatusText(event.payload);
+        if (isDm) {
+          slackClient.chat.postMessage({ channel: slackChannel, text: msg })
+            .catch(err => log.error("postMessage", "failed:", err));
+        } else {
+          const state = activeStreams.get(key);
+          if (state && state.ts) {
+            slackClient.chat.appendStream({
+              channel: slackChannel,
+              ts: state.ts,
+              markdown_text: msg,
+            }).catch(err => log.error("appendStream", "tool status failed:", err));
+          } else {
+            slackClient.chat.postMessage({
+              channel: slackChannel,
+              text: msg,
+              ...(threadTs ? { thread_ts: threadTs } : {})
+            }).catch(err => log.error("postMessage", "failed:", err));
+          }
+        }
+        return;
+      }
 
       if (isDm) {
         if (event.type === "final") {
