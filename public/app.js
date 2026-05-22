@@ -261,15 +261,24 @@ function appendMessage(kind, role, content, toolCallId) {
     article.dataset.toolCallId = toolCallId;
   }
 
+  const metaEl = document.createElement("div");
+  metaEl.className = "message-meta";
+
   const roleEl = document.createElement("div");
   roleEl.className = "role";
   roleEl.textContent = role;
+
+  const timeEl = document.createElement("time");
+  timeEl.className = "message-time";
+  timeEl.textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  metaEl.append(roleEl, timeEl);
 
   const contentEl = document.createElement("div");
   contentEl.className = "content";
   contentEl.innerHTML = marked.parse(content);
 
-  article.append(roleEl, contentEl);
+  article.append(metaEl, contentEl);
   messagesEl.append(article);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return article;

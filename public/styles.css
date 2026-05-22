@@ -136,12 +136,24 @@ h1 {
   background: rgba(226, 93, 93, 0.12);
 }
 
-.role {
+.message-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
   margin-bottom: 7px;
+}
+
+.role {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
   text-transform: uppercase;
+}
+
+.message-time {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
 }
 
 .content {
