@@ -47,12 +47,21 @@ app.use(express.static(path.resolve(__dirname, "..", "public")));
 // SSE 客户端集合：用于设备事件广播到所有已连接的 Web UI
 const sseClients = new Set<import("http").ServerResponse>();
 
+/** 强制刷新 TCP 缓冲区，避免 Node.js  cork 合并小数据块 */
+function sseFlush(response: import("http").ServerResponse) {
+  const sock = (response as any).socket;
+  if (sock && typeof sock.uncork === "function") {
+    sock.uncork();
+  }
+}
+
 /** 广播 SSE 事件到所有已连接客户端 */
 function broadcastSse(event: ChatEventOut): void {
   for (const client of sseClients) {
     try {
       client.write(`event: ${event.type}\n`);
       client.write(`data: ${JSON.stringify(event)}\n\n`);
+      sseFlush(client);
     } catch {
       sseClients.delete(client);
     }
@@ -102,6 +111,7 @@ app.get("/api/events", (request, response) => {
 
   response.write(`event: ${event.type}\n`);
   response.write(`data: ${JSON.stringify(event)}\n\n`);
+  sseFlush(response);
 
   request.on("close", () => {
     sseClients.delete(response);
@@ -122,6 +132,7 @@ app.post("/api/chat", async (request, response) => {
     const emit = (event: ChatEventOut) => {
       response.write(`event: ${event.type}\n`);
       response.write(`data: ${JSON.stringify(event)}\n\n`);
+      sseFlush(response);
     };
 
     emit({
@@ -156,6 +167,7 @@ app.post("/api/chat", async (request, response) => {
   const emit = (event: ChatEventOut) => {
     response.write(`event: ${event.type}\n`);
     response.write(`data: ${JSON.stringify(event)}\n\n`);
+    sseFlush(response);
     maybeMirrorToSlack(slackNotifier, event, mirrorThreadTs); // Web→Slack mirror 旁路
   };
 

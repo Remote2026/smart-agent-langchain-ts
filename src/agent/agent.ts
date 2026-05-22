@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
+import { HumanMessage, AIMessage, AIMessageChunk, isAIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
@@ -137,6 +137,7 @@ export class SmartAgent {
     let lastSeenGraphEventCount = 0;
     let lastStateMessages: BaseMessage[] | null = null;
     let lastFinalText = "";
+    const seenToolCallIds = new Set<string>();
 
     try {
       // 初始 state（扁平 channel，直接传字段）：
@@ -158,29 +159,66 @@ export class SmartAgent {
       const stream = await this.v2Graph.stream(
         initialGraphState,
         {
-          streamMode: "values",
+          streamMode: ["values", "messages"],
           recursionLimit: 35,
           configurable: { thread_id: input.sessionId }
         }
       );
 
-      for await (const chunk of stream) {
-        const v2State = chunk as any;
-        if (!v2State || !Array.isArray(v2State.graphEvents)) {
-          continue;
-        }
+      for await (const [eventType, data] of stream) {
+        if (eventType === "values") {
+          const v2State = data as any;
+          if (!v2State || !Array.isArray(v2State.graphEvents)) {
+            continue;
+          }
 
-        lastStateMessages = Array.isArray(v2State.messages) ? (v2State.messages as BaseMessage[]) : lastStateMessages;
-        lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
+          lastStateMessages = Array.isArray(v2State.messages) ? (v2State.messages as BaseMessage[]) : lastStateMessages;
+          lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
 
-        const lastMsg = lastStateMessages?.[lastStateMessages.length - 1];
-        log.info("handleUserMessage", "graph state", { lastMsg, lastFinalText });
+          const lastMsg = lastStateMessages?.[lastStateMessages.length - 1];
+          log.info("handleUserMessage", "graph state", { lastMsg, lastFinalText });
 
-        // delta 切片：只取本轮新增的 graphEvents
-        const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
-        lastSeenGraphEventCount = v2State.graphEvents.length;
-        for (const ev of newEvents) {
-          input.emit(graphEventToSse(input.sessionId, ev, channel));
+          // 如果 LLM 返回了新的 tool_calls，立即发送 tool:start SSE（不等 tool_node 执行完）
+          if (lastMsg && isAIMessage(lastMsg) && lastMsg.tool_calls?.length) {
+            for (const tc of lastMsg.tool_calls) {
+              if (tc.id && !seenToolCallIds.has(tc.id)) {
+                seenToolCallIds.add(tc.id);
+                input.emit({
+                  sessionId: input.sessionId,
+                  channel,
+                  type: "tool",
+                  payload: {
+                    name: tc.name ?? "unknown",
+                    status: "executing",
+                    input: tc.args,
+                    toolCallId: tc.id
+                  }
+                });
+              }
+            }
+          }
+
+          // delta 切片：只取本轮新增的 graphEvents
+          const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
+          lastSeenGraphEventCount = v2State.graphEvents.length;
+          for (const ev of newEvents) {
+            input.emit(graphEventToSse(input.sessionId, ev, channel));
+          }
+        } else if (eventType === "messages") {
+          const [messageChunk] = data as [BaseMessage, Record<string, any>];
+          // 只转发 AI 消息（流式增量或完整消息），过滤掉 SystemMessage 等其他类型
+          if (!isAIMessage(messageChunk)) {
+            continue;
+          }
+          const text = typeof messageChunk.content === "string" ? messageChunk.content : "";
+          if (text) {
+            input.emit({
+              sessionId: input.sessionId,
+              channel,
+              type: "token",
+              payload: { text }
+            });
+          }
         }
       }
     } catch (error) {
@@ -222,6 +260,8 @@ export class SmartAgent {
 
     let lastSeenGraphEventCount = 0;
     let lastFinalText = "";
+    let lastStateMessages: BaseMessage[] | null = null;
+    const seenToolCallIds = new Set<string>();
 
     try {
       const initialGraphState = {
@@ -234,24 +274,61 @@ export class SmartAgent {
       const stream = await this.v2Graph.stream(
         initialGraphState,
         {
-          streamMode: "values",
+          streamMode: ["values", "messages"],
           recursionLimit: 35,
           configurable: { thread_id: input.sessionId }
         }
       );
 
-      for await (const chunk of stream) {
-        const v2State = chunk as any;
-        if (!v2State || !Array.isArray(v2State.graphEvents)) {
-          continue;
-        }
+      for await (const [eventType, data] of stream) {
+        if (eventType === "values") {
+          const v2State = data as any;
+          if (!v2State || !Array.isArray(v2State.graphEvents)) {
+            continue;
+          }
 
-        lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
+          lastFinalText = typeof v2State.finalText === "string" ? v2State.finalText : lastFinalText;
+          lastStateMessages = Array.isArray(v2State.messages) ? (v2State.messages as BaseMessage[]) : lastStateMessages;
 
-        const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
-        lastSeenGraphEventCount = v2State.graphEvents.length;
-        for (const ev of newEvents) {
-          input.emit(graphEventToSse(input.sessionId, ev, channel));
+          const lastMsg = lastStateMessages?.[lastStateMessages.length - 1];
+          if (lastMsg && isAIMessage(lastMsg) && lastMsg.tool_calls?.length) {
+            for (const tc of lastMsg.tool_calls) {
+              if (tc.id && !seenToolCallIds.has(tc.id)) {
+                seenToolCallIds.add(tc.id);
+                input.emit({
+                  sessionId: input.sessionId,
+                  channel,
+                  type: "tool",
+                  payload: {
+                    name: tc.name ?? "unknown",
+                    status: "executing",
+                    input: tc.args,
+                    toolCallId: tc.id
+                  }
+                });
+              }
+            }
+          }
+
+          const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
+          lastSeenGraphEventCount = v2State.graphEvents.length;
+          for (const ev of newEvents) {
+            input.emit(graphEventToSse(input.sessionId, ev, channel));
+          }
+        } else if (eventType === "messages") {
+          const [messageChunk] = data as [BaseMessage, Record<string, any>];
+          if (!isAIMessage(messageChunk)) {
+            continue;
+          }
+          const text = typeof messageChunk.content === "string" ? messageChunk.content : "";
+          if (text) {
+            input.emit({
+              sessionId: input.sessionId,
+              channel,
+              type: "token",
+              payload: { text }
+            });
+          }
         }
       }
     } catch (error) {

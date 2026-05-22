@@ -125,6 +125,12 @@ h1 {
   background: rgba(63, 191, 143, 0.09);
 }
 
+.message.tool.executing {
+  border-color: rgba(90, 141, 238, 0.7);
+  background: rgba(90, 141, 238, 0.12);
+  animation: pulse-border 1.2s ease-in-out infinite;
+}
+
 .message.error {
   border-color: rgba(226, 93, 93, 0.7);
   background: rgba(226, 93, 93, 0.12);
@@ -143,6 +149,25 @@ h1 {
   overflow-wrap: anywhere;
   line-height: 1.48;
   font-size: 14px;
+}
+
+.content pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.content th,
+.content td {
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+  text-align: left;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .composer {

@@ -40,6 +40,9 @@ const GRAPH_NODES = [
 ];
 const graphStepState = new Map();
 
+/** 当前正在流式渲染的 assistant 消息元素 */
+let currentAssistantMessage = null;
+
 /** File → 纯 base64 字符串（不含 data:image/... 前缀） */
 function toBase64(file) {
   return new Promise((resolve, reject) => {
@@ -128,6 +131,7 @@ formEl.addEventListener("submit", async (event) => {
   resizeInput();
   imageInput.value = "";
   hideImagePreview();
+  currentAssistantMessage = null;
   setBusy(true);
   resetGraphSteps();
 
@@ -192,6 +196,9 @@ function handleServerEvent(event) {
   if (event.type === "status") {
     statusEl.textContent = event.payload.status;
     statusEl.classList.toggle("busy", event.payload.status !== "done");
+    if (event.payload.status === "done") {
+      currentAssistantMessage = null;
+    }
     return;
   }
 
@@ -201,8 +208,24 @@ function handleServerEvent(event) {
     return;
   }
 
+  if (event.type === "token") {
+    if (!currentAssistantMessage) {
+      currentAssistantMessage = appendMessage("assistant", "Assistant", "");
+    }
+    const contentEl = currentAssistantMessage.querySelector(".content");
+    contentEl.textContent += event.payload.text;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return;
+  }
+
   if (event.type === "final") {
-    appendMessage("assistant", "Assistant", event.payload.text || "(empty response)");
+    if (currentAssistantMessage) {
+      const contentEl = currentAssistantMessage.querySelector(".content");
+      contentEl.innerHTML = marked.parse(event.payload.text || "(empty response)");
+      currentAssistantMessage = null;
+    } else {
+      appendMessage("assistant", "Assistant", event.payload.text || "(empty response)");
+    }
     return;
   }
 
@@ -210,18 +233,17 @@ function handleServerEvent(event) {
     appendToolEvent(event.payload);
     const tcId = event.payload.toolCallId || "";
     if (event.payload.status === "executing") {
-      const text = `${event.payload.name}\n${formatJson(event.payload.input)}`;
+      const text = `**${event.payload.name}** ⏳\n\n\`\`\`json\n${formatJson(event.payload.input)}\n\`\`\``;
       appendMessage("tool", "Tool Call", text, tcId);
     } else {
-      // ok / error：更新已有的工具气泡
       const existing = messagesEl.querySelector(`[data-tool-call-id="${tcId}"]`);
       if (existing) {
         const contentEl = existing.querySelector(".content");
-        const status = event.payload.status === "ok" ? "✓" : "✗";
+        const status = event.payload.status === "ok" ? "✅" : "❌";
         const output = typeof event.payload.output === "string"
           ? event.payload.output
           : JSON.stringify(event.payload.output);
-        contentEl.innerHTML = marked.parse(`${event.payload.name} ${status}\n\n\`\`\`\n${output.slice(0, 300)}\n\`\`\``);
+        contentEl.innerHTML = marked.parse(`**${event.payload.name}** ${status}\n\n${output.slice(0, 500)}`);
       }
     }
     return;
@@ -250,6 +272,7 @@ function appendMessage(kind, role, content, toolCallId) {
   article.append(roleEl, contentEl);
   messagesEl.append(article);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+  return article;
 }
 
 function appendToolEvent(payload) {

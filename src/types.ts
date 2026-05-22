@@ -80,6 +80,12 @@ export type ChatEventOut =
   | {
     sessionId: string;
     channel: Channel;
+    type: "token";
+    payload: { text: string };
+  }
+  | {
+    sessionId: string;
+    channel: Channel;
     type: "final";
     payload: { text: string };
   }
