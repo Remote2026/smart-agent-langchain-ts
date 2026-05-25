@@ -29,12 +29,14 @@ export async function startSlackApp(options: {
     appToken: process.env.SLACK_APP_TOKEN,
     signingSecret: process.env.SLACK_SIGNING_SECRET,
     logger: {
-      debug: (msg: string) => log.debug("bolt", msg),
-      info: (msg: string) => log.info("bolt", msg),
+      // debug: (msg: string) => log.debug("bolt", msg),
+      // info: (msg: string) => log.info("bolt", msg),
+      debug: () => {},
+      info: () => {},
       warn: (msg: string) => log.warn("bolt", msg),
       error: (msg: string) => log.error("bolt", msg),
       setLevel: () => {},
-      getLevel: () => "info" as any,
+      getLevel: () => "warn" as any,
       setName: () => {},
     }
   } as AppOptions);
@@ -87,7 +89,11 @@ export async function startSlackApp(options: {
     log.error("bolt", "App error:", error);
   });
 
-  await app.start();
-  log.info("startSlackApp", "Socket Mode app started");
+  // 不阻塞服务启动，让 Socket Mode 在后台连接
+  app.start().then(() => {
+    log.info("startSlackApp", "Socket Mode app started");
+  }).catch(err => {
+    log.error("startSlackApp", "Socket Mode error:", err);
+  });
   return app;
 }

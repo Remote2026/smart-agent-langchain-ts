@@ -10,16 +10,48 @@ import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("slack/notifier.ts");
 
-const STREAM_FLUSH_MS = 300;
-const STREAM_BUFFER_MAX = 120;
+const STREAM_FLUSH_MS = 500;
 
 type StreamState = {
   ts: string | null;
   buffer: string;
+  displayedText: string;
+  lastSyncedText: string;
   timer: ReturnType<typeof setTimeout> | null;
   flushing: boolean;
   startPromise: Promise<void> | null;
+  finalText?: string;
 };
+
+/** 在临时更新时自动补全未闭合的 Markdown，防止排版错乱 */
+function closeMarkdown(text: string): string {
+  let result = text;
+
+  // 粗体 **
+  const boldCount = (result.match(/\*\*/g) || []).length;
+  if (boldCount % 2 !== 0) result += "**";
+
+  // inline code `（排除 ``` 代码块内的）
+  let singleBacktickCount = 0;
+  let inCodeBlock = false;
+  for (let i = 0; i < result.length; i++) {
+    if (result.slice(i, i + 3) === "```") {
+      inCodeBlock = !inCodeBlock;
+      i += 2;
+      continue;
+    }
+    if (!inCodeBlock && result[i] === "`") {
+      singleBacktickCount++;
+    }
+  }
+  if (singleBacktickCount % 2 !== 0) result += "`";
+
+  // 代码块 ```
+  const codeBlockCount = (result.match(/```/g) || []).length;
+  if (codeBlockCount % 2 !== 0) result += "\n```";
+
+  return result;
+}
 
 export type SlackNotifier = {
   /** 发送 Web 用户消息到 Slack 默认频道，返回消息 ts 用于后续 thread 回复 */
@@ -46,37 +78,77 @@ export function createSlackNotifier(
 
   async function flushBuffer(threadTs: string) {
     const state = activeStreams.get(threadTs);
-    if (!state || !state.ts || !state.buffer || state.flushing) return;
+    if (!state || !state.ts || state.flushing) return;
+
+    if (state.finalText) {
+      state.flushing = true;
+      try {
+        log.debug("flushBuffer", "chat.update final", { channel: defaultChannelId, ts: state.ts, textLen: state.finalText.length });
+        await client.chat.update({
+          channel: defaultChannelId,
+          ts: state.ts,
+          text: state.finalText,
+        });
+        log.debug("flushBuffer", "chat.update final ok");
+      } catch (err) {
+        log.error("flushBuffer", "final update failed:", err);
+      } finally {
+        activeStreams.delete(threadTs);
+      }
+      return;
+    }
+
+    const hasBuffer = !!state.buffer;
+    const hasPendingUpdate = state.displayedText !== state.lastSyncedText;
+    if (!hasBuffer && !hasPendingUpdate) return;
 
     state.flushing = true;
-    const text = state.buffer;
-    state.buffer = "";
+
+    const parts: string[] = [];
+    if (state.displayedText) parts.push(state.displayedText);
+    if (state.buffer) parts.push(state.buffer);
+    const textToSend = parts.join("\n\n");
 
     try {
-      await client.chat.appendStream({
+      log.debug("flushBuffer", "chat.update", { channel: defaultChannelId, ts: state.ts, textLen: textToSend.length });
+      await client.chat.update({
         channel: defaultChannelId,
         ts: state.ts,
-        markdown_text: text,
+        text: closeMarkdown(textToSend),
       });
-    } catch (err) {
-      log.error("appendStream", "failed:", err);
+      log.debug("flushBuffer", "chat.update ok");
+      state.lastSyncedText = state.displayedText;
+    } catch (err: any) {
+      if (err.data?.error === "rate_limited" || err.statusCode === 429) {
+        const retryAfter = (err.data?.retry_after || 1) * 1000;
+        log.warn("flushBuffer", `rate limited, retry after ${retryAfter}ms`);
+        state.timer = setTimeout(() => {
+          state.timer = null;
+          flushBuffer(threadTs);
+        }, retryAfter);
+      } else {
+        log.error("flushBuffer", "update failed:", err);
+      }
     } finally {
+      state.buffer = "";
       state.flushing = false;
-      if (state.buffer) {
+      if (state.finalText) {
+        scheduleFlush(threadTs);
+      } else if (state.buffer && !state.timer) {
         scheduleFlush(threadTs);
       }
     }
   }
 
-  function scheduleFlush(threadTs: string) {
+  function scheduleFlush(threadTs: string, delay?: number) {
     const state = activeStreams.get(threadTs);
-    if (!state || state.timer) return;
+    if (!state) return;
+    if (state.timer) clearTimeout(state.timer);
 
-    const delay = state.buffer.length >= STREAM_BUFFER_MAX ? 0 : STREAM_FLUSH_MS;
     state.timer = setTimeout(() => {
       state.timer = null;
       flushBuffer(threadTs);
-    }, delay);
+    }, delay ?? STREAM_FLUSH_MS);
   }
 
   async function mirrorWebUserMessage(text: string) {
@@ -124,6 +196,8 @@ export function createSlackNotifier(
       state = {
         ts: null,
         buffer: text,
+        displayedText: "",
+        lastSyncedText: "",
         timer: null,
         flushing: false,
         startPromise: null,
@@ -132,28 +206,28 @@ export function createSlackNotifier(
 
       state.startPromise = (async () => {
         try {
-          const result = await client.chat.startStream({
+          const result = await client.chat.postMessage({
             channel: defaultChannelId,
-            markdown_text: text,
+            text: "⏳ 正在思考中...",
             thread_ts: threadTs,
           });
           state!.ts = result.ts || null;
-          if (state!.ts && state!.buffer.length > text.length) {
-            scheduleFlush(threadTs);
+          if (state!.ts) {
+            state!.displayedText = "";
+            state!.lastSyncedText = "";
           }
         } catch (err) {
-          log.error("startStream", "failed:", err);
+          log.error("streamToken", "postMessage failed:", err);
           activeStreams.delete(threadTs);
         } finally {
           state!.startPromise = null;
         }
       })();
-
       return;
     }
 
     state.buffer += text;
-    if (state.ts) {
+    if (state.ts && !state.finalText) {
       scheduleFlush(threadTs);
     }
   }
@@ -180,16 +254,25 @@ export function createSlackNotifier(
       clearTimeout(state.timer);
       state.timer = null;
     }
-    await flushBuffer(threadTs);
+
+    state.buffer = "";
+
+    const parts: string[] = [];
+    if (state.displayedText) parts.push(state.displayedText);
+    parts.push(text);
+    const finalText = parts.join("\n\n");
 
     if (state.ts) {
       try {
-        await client.chat.stopStream({
+        log.debug("streamFinal", "chat.update final", { channel: defaultChannelId, ts: state.ts, textLen: finalText.length });
+        await client.chat.update({
           channel: defaultChannelId,
           ts: state.ts,
+          text: closeMarkdown(finalText),
         });
+        log.debug("streamFinal", "chat.update final ok");
       } catch (err) {
-        log.error("stopStream", "failed:", err);
+        log.error("streamFinal", "final update failed:", err);
       }
     }
 
@@ -211,20 +294,25 @@ export function createSlackNotifier(
           clearTimeout(state.timer);
           state.timer = null;
         }
-        await flushBuffer(threadTs);
-
+        state.buffer = "";
+        const parts: string[] = [];
+        if (state.displayedText) parts.push(state.displayedText);
+        parts.push("处理失败：" + message);
+        const errorText = parts.join("\n\n");
         if (state.ts) {
           try {
-            await client.chat.stopStream({
+            await client.chat.update({
               channel: defaultChannelId,
               ts: state.ts,
+              text: closeMarkdown(errorText),
             });
           } catch (err) {
-            log.error("stopStream", "failed:", err);
+            log.error("streamError", "update failed:", err);
           }
         }
         activeStreams.delete(threadTs);
       }
+      return;
     }
 
     await mirrorWebError(message, threadTs);
@@ -239,17 +327,16 @@ export function createSlackNotifier(
 
     const state = activeStreams.get(threadTs);
     if (state && state.ts) {
-      client.chat.appendStream({
-        channel: defaultChannelId,
-        ts: state.ts,
-        markdown_text: msg,
-      }).catch(err => log.error("appendStream", "tool status failed:", err));
+      state.displayedText += "\n" + msg;
+      // 统一走 flushBuffer，避免并发竞争
+      scheduleFlush(threadTs, 0);
     } else {
+      log.debug("streamToolStatus", `postMessage (no stream): ${msg}`);
       client.chat.postMessage({
         channel: defaultChannelId,
         text: msg,
         thread_ts: threadTs,
-      }).catch(err => log.error("postMessage", "failed:", err));
+      }).catch(err => log.error("postMessage", "tool status failed:", err));
     }
   }
 

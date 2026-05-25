@@ -184,6 +184,7 @@ export class SmartAgent {
             for (const tc of lastMsg.tool_calls) {
               if (tc.id && !seenToolCallIds.has(tc.id)) {
                 seenToolCallIds.add(tc.id);
+                log.debug("handleUserMessage", `emit tool executing: ${tc.name}`);
                 input.emit({
                   sessionId: input.sessionId,
                   channel,
@@ -202,7 +203,9 @@ export class SmartAgent {
           // delta 切片：只取本轮新增的 graphEvents
           const newEvents = v2State.graphEvents.slice(lastSeenGraphEventCount) as GraphEvent[];
           lastSeenGraphEventCount = v2State.graphEvents.length;
+          log.debug("handleUserMessage", `graphEvents delta: ${newEvents.length} new, total ${lastSeenGraphEventCount}`);
           for (const ev of newEvents) {
+            log.debug("handleUserMessage", `emit graphEvent: ${ev.type} ${(ev as any).name ?? (ev as any).node} ${ev.phase}`);
             input.emit(graphEventToSse(input.sessionId, ev, channel));
           }
         } else if (eventType === "messages") {

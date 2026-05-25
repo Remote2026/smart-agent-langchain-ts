@@ -4,7 +4,7 @@
  * 职责：
  * 1. 过滤 bot 消息/subtype/空文本（防回环第二层）
  * 2. 从 Slack event 提取用户文本并去除 <@U123> mention token
- * 3. 构造 emit(event)：全部事件广播到 Web SSE，仅 final/error 回复 Slack thread
+ * 3. 构造 emit(event)：全部事件广播到 Web SSE，token/final/error 走流式更新
  * 4. 所有 Slack 消息使用 DEFAULT_SESSION_ID，与 Web 共享 Agent 记忆
  */
 import type { WebClient } from "@slack/web-api";
@@ -16,16 +16,49 @@ import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("slack/transport.ts");
 
-const STREAM_FLUSH_MS = 300;
-const STREAM_BUFFER_MAX = 120;
+const STREAM_FLUSH_MS = 500;
 
 type StreamState = {
-  ts: string | null;
+  ts: string;
+  channel: string;
   buffer: string;
+  /** 当前消息已显示的完整文本（含 tool 状态），update 时以此为基准 */
+  displayedText: string;
+  /** 上次成功同步到 Slack 的文本，用于检测是否需要 update */
+  lastSyncedText: string;
   timer: ReturnType<typeof setTimeout> | null;
   flushing: boolean;
-  startPromise: Promise<void> | null;
 };
+
+/** 在临时更新时自动补全未闭合的 Markdown，防止排版错乱 */
+function closeMarkdown(text: string): string {
+  let result = text;
+
+  // 粗体 **
+  const boldCount = (result.match(/\*\*/g) || []).length;
+  if (boldCount % 2 !== 0) result += "**";
+
+  // inline code `（排除 ``` 代码块内的）
+  let singleBacktickCount = 0;
+  let inCodeBlock = false;
+  for (let i = 0; i < result.length; i++) {
+    if (result.slice(i, i + 3) === "```") {
+      inCodeBlock = !inCodeBlock;
+      i += 2;
+      continue;
+    }
+    if (!inCodeBlock && result[i] === "`") {
+      singleBacktickCount++;
+    }
+  }
+  if (singleBacktickCount % 2 !== 0) result += "`";
+
+  // 代码块 ```
+  const codeBlockCount = (result.match(/```/g) || []).length;
+  if (codeBlockCount % 2 !== 0) result += "\n```";
+
+  return result;
+}
 
 export function createSlackTransport(options: {
   agent: SmartAgent;
@@ -39,163 +72,145 @@ export function createSlackTransport(options: {
     return threadTs ? `${channel}:${threadTs}` : channel;
   }
 
-  async function flushStream(key: string, channel: string) {
+  async function flushStream(key: string) {
     const state = activeStreams.get(key);
-    if (!state || !state.ts || !state.buffer || state.flushing) return;
+    if (!state || state.flushing) return;
+
+    const hasBuffer = !!state.buffer;
+    const hasPendingUpdate = state.displayedText !== state.lastSyncedText;
+    if (!hasBuffer && !hasPendingUpdate) return;
 
     state.flushing = true;
-    const text = state.buffer;
-    state.buffer = "";
-    log.info("flushStream", `appendStream key=${key} len=${text.length}`);
+
+    // displayedText 只维护 tool 状态，buffer 是临时 token
+    // 发送时组合，但不把 buffer 持久化到 displayedText
+    const parts: string[] = [];
+    if (state.displayedText) parts.push(state.displayedText);
+    if (state.buffer) parts.push(state.buffer);
+    const textToSend = parts.join("\n\n");
 
     try {
-      await slackClient.chat.appendStream({
-        channel,
+      log.debug("flushStream", "chat.update", { channel: state.channel, ts: state.ts, textLen: textToSend.length });
+      await slackClient.chat.update({
+        channel: state.channel,
         ts: state.ts,
-        markdown_text: text,
+        text: closeMarkdown(textToSend),
       });
-    } catch (err) {
-      log.error("appendStream", "failed:", err);
+      log.debug("flushStream", "chat.update ok");
+      state.lastSyncedText = state.displayedText;
+    } catch (err: any) {
+      if (err.data?.error === "rate_limited" || err.statusCode === 429) {
+        const retryAfter = (err.data?.retry_after || 1) * 1000;
+        log.warn("flushStream", `rate limited, retry after ${retryAfter}ms`);
+        state.timer = setTimeout(() => {
+          state.timer = null;
+          flushStream(key);
+        }, retryAfter);
+      } else {
+        log.error("flushStream", "update failed:", err);
+      }
     } finally {
+      state.buffer = "";
       state.flushing = false;
-      if (state.buffer) {
-        scheduleFlush(key, channel);
+      if (state.buffer && !state.timer) {
+        scheduleFlush(key);
       }
     }
   }
 
-  function scheduleFlush(key: string, channel: string) {
+  function scheduleFlush(key: string, delay?: number) {
     const state = activeStreams.get(key);
-    if (!state || state.timer) return;
+    if (!state) return;
+    if (state.timer) clearTimeout(state.timer);
 
-    const delay = state.buffer.length >= STREAM_BUFFER_MAX ? 0 : STREAM_FLUSH_MS;
     state.timer = setTimeout(() => {
       state.timer = null;
-      flushStream(key, channel);
-    }, delay);
+      flushStream(key);
+    }, delay ?? STREAM_FLUSH_MS);
   }
 
-  async function startSlackStream(key: string, channel: string, text: string, threadTs?: string) {
-    const state: StreamState = {
-      ts: null,
-      buffer: text,
-      timer: null,
-      flushing: false,
-      startPromise: null,
-    };
-    activeStreams.set(key, state);
-
-    state.startPromise = (async () => {
-      try {
-        const startArgs: { channel: string; markdown_text: string; thread_ts?: string } = {
-          channel,
-          markdown_text: text,
-        };
-        if (threadTs) startArgs.thread_ts = threadTs;
-        log.info("startSlackStream", `startStream key=${key} textLen=${text.length}`);
-        const result = await slackClient.chat.startStream(startArgs as any);
-        state.ts = result.ts || null;
-        log.info("startSlackStream", `startStream ok key=${key} ts=${state.ts}`);
-        if (state.ts && state.buffer.length > text.length) {
-          scheduleFlush(key, channel);
-        }
-      } catch (err) {
-        log.error("startStream", "failed:", err);
-        activeStreams.delete(key);
-      } finally {
-        state.startPromise = null;
-      }
-    })();
-  }
-
-  async function handleSlackToken(key: string, channel: string, text: string, threadTs?: string) {
-    log.info("handleSlackToken", `key=${key} textLen=${text.length}`);
-    let state = activeStreams.get(key);
-    if (!state) {
-      await startSlackStream(key, channel, text, threadTs);
-      return;
-    }
+  async function handleSlackToken(key: string, text: string) {
+    const state = activeStreams.get(key);
+    if (!state) return;
     state.buffer += text;
-    if (state.ts) {
-      scheduleFlush(key, channel);
-    }
+    scheduleFlush(key);
   }
 
   async function handleSlackFinal(key: string, channel: string, text: string, threadTs?: string) {
-    log.info("handleSlackFinal", `key=${key} textLen=${text.length}`);
-    let state = activeStreams.get(key);
+    const state = activeStreams.get(key);
     if (!state) {
-      log.info("handleSlackFinal", "no active stream, fallback to postMessage");
       await slackClient.chat.postMessage({
         channel,
         text,
-        ...(threadTs ? { thread_ts: threadTs } : {})
+        ...(threadTs ? { thread_ts: threadTs } : {}),
       }).catch(err => log.error("postMessage", "failed:", err));
       return;
-    }
-
-    if (state.startPromise) {
-      await state.startPromise;
-      state = activeStreams.get(key);
-      if (!state) {
-        await slackClient.chat.postMessage({
-          channel,
-          text,
-          ...(threadTs ? { thread_ts: threadTs } : {})
-        }).catch(err => log.error("postMessage", "failed:", err));
-        return;
-      }
     }
 
     if (state.timer) {
       clearTimeout(state.timer);
       state.timer = null;
     }
-    await flushStream(key, channel);
 
-    if (state.ts) {
-      try {
-        log.info("handleSlackFinal", `stopStream key=${key} ts=${state.ts}`);
-        await slackClient.chat.stopStream({ channel, ts: state.ts });
-      } catch (err) {
-        log.error("stopStream", "failed:", err);
-      }
+    state.buffer = "";
+
+    // 组合 tool 状态 + final text，不保留流式 token 累积
+    const parts: string[] = [];
+    if (state.displayedText) parts.push(state.displayedText);
+    parts.push(text);
+    const finalText = parts.join("\n\n");
+
+    try {
+      log.debug("handleSlackFinal", "chat.update final", { channel: state.channel, ts: state.ts, textLen: finalText.length });
+      await slackClient.chat.update({
+        channel: state.channel,
+        ts: state.ts,
+        text: closeMarkdown(finalText),
+      });
+      log.debug("handleSlackFinal", "chat.update final ok");
+    } catch (err) {
+      log.error("handleSlackFinal", "final update failed:", err);
     }
+
     activeStreams.delete(key);
   }
 
   async function handleSlackError(key: string, channel: string, message: string, threadTs?: string) {
-    let state = activeStreams.get(key);
+    const state = activeStreams.get(key);
     if (state) {
-      if (state.startPromise) {
-        await state.startPromise;
-        state = activeStreams.get(key);
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
       }
-      if (state) {
-        if (state.timer) {
-          clearTimeout(state.timer);
-          state.timer = null;
-        }
-        await flushStream(key, channel);
-        if (state.ts) {
-          try {
-            await slackClient.chat.stopStream({ channel, ts: state.ts });
-          } catch (err) {
-            log.error("stopStream", "failed:", err);
-          }
-        }
-        activeStreams.delete(key);
+      if (state.buffer) {
+        state.displayedText += state.buffer;
+        state.buffer = "";
       }
+      state.buffer = "";
+      const parts: string[] = [];
+      if (state.displayedText) parts.push(state.displayedText);
+      parts.push("处理失败：" + message);
+      const errorText = parts.join("\n\n");
+      try {
+        await slackClient.chat.update({
+          channel: state.channel,
+          ts: state.ts,
+          text: closeMarkdown(errorText),
+        });
+      } catch (err) {
+        log.error("handleSlackError", "update failed:", err);
+      }
+      activeStreams.delete(key);
+      return;
     }
 
     await slackClient.chat.postMessage({
       channel,
       text: `处理失败：${message}`,
-      ...(threadTs ? { thread_ts: threadTs } : {})
+      ...(threadTs ? { thread_ts: threadTs } : {}),
     }).catch(err => log.error("postMessage", "failed:", err));
   }
 
-  // @mention 事件处理：去除 <@U123> token，只有纯文本传给 Agent
   async function handleAppMention(event: {
     text: string;
     channel: string;
@@ -204,18 +219,12 @@ export function createSlackTransport(options: {
     bot_id?: string;
     subtype?: string;
   }) {
-    // log.info("handleAppMention", { bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 80) });
-    // 防回环第2层：过滤 bot 自己发出的消息和非普通消息 subtype
-    if (event.bot_id) { /* log.info("handleAppMention", "skipped: bot_id"); */ return; }
+    if (event.bot_id) return;
 
-    // Slack @mention 带图片：下载文件 → base64 → 构造 kind:"image" InputMessage
     if ((event as any).files?.length > 0) {
       const file = (event as any).files[0];
       const mimeType = file.mimetype || "image/jpeg";
-      if (!mimeType.startsWith("image/")) {
-        // log.info("handleAppMention", "file_share skipped: non-image");
-        return;
-      }
+      if (!mimeType.startsWith("image/")) return;
       const token = process.env.SLACK_BOT_TOKEN;
       const response = await fetch(file.url_private, {
         headers: { Authorization: `Bearer ${token}` }
@@ -226,29 +235,25 @@ export function createSlackTransport(options: {
       }
       const arrayBuffer = await response.arrayBuffer();
       const base64 = Buffer.from(arrayBuffer).toString("base64");
-      // 去除 <@U123> mention token，保留纯文本
       const text = event.text.replace(/<@\w+>/g, "").trim() || undefined;
       const threadTs = event.thread_ts ?? event.ts;
 
-      // log.info("handleAppMention", "processing file_share -> agent");
       await processMessage(
         text ?? "",
         event.channel,
         threadTs,
         { kind: "image", imageBase64: base64, mimeType, text },
-        false
       );
       return;
     }
 
-    if (event.subtype) { /* log.info("handleAppMention", "skipped: subtype"); */ return; }
+    if (event.subtype) return;
 
     const threadTs = event.thread_ts ?? event.ts;
     const text = event.text.replace(/<@\w+>/g, "").trim();
-    if (!text) { /* log.info("handleAppMention", "skipped: empty text after stripping mention"); */ return; }
+    if (!text) return;
 
-    // log.info("handleAppMention", "processing -> agent");
-    await processMessage(text, event.channel, threadTs, undefined, false);
+    await processMessage(text, event.channel, threadTs);
   }
 
   async function handleDirectMessage(event: {
@@ -260,23 +265,13 @@ export function createSlackTransport(options: {
     subtype?: string;
     files?: Array<{ url_private: string; mimetype: string }>;
   }) {
-    // log.info("handleDirectMessage", { bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 80) });
-    if (event.bot_id) { /* log.info("handleDirectMessage", "skipped: bot_id"); */ return; }
-    // file_share 是唯一放行的 subtype（图片消息），其他 subtype 全部过滤
-    if (event.subtype && event.subtype !== "file_share") {
-      // log.info("handleDirectMessage", "skipped: subtype=", event.subtype);
-      return;
-    }
+    if (event.bot_id) return;
+    if (event.subtype && event.subtype !== "file_share") return;
 
-    // Slack 图片消息：下载文件 → base64 → 构造 kind:"image" InputMessage
     if (event.subtype === "file_share" && (event as any).files?.length > 0) {
       const file = (event as any).files[0];
       const mimeType = file.mimetype || "image/jpeg";
-      // 只处理图片，忽略其他文件类型
-      if (!mimeType.startsWith("image/")) {
-        // log.info("handleDirectMessage", "file_share skipped: non-image", mimeType);
-        return;
-      }
+      if (!mimeType.startsWith("image/")) return;
       const token = process.env.SLACK_BOT_TOKEN;
       const response = await fetch(file.url_private, {
         headers: { Authorization: `Bearer ${token}` }
@@ -288,44 +283,55 @@ export function createSlackTransport(options: {
       const arrayBuffer = await response.arrayBuffer();
       const base64 = Buffer.from(arrayBuffer).toString("base64");
       const text = (event.text || "").trim() || undefined;
-      const threadTs = (event as any).thread_ts ?? event.ts;
 
-      // log.info("handleDirectMessage", "processing file_share -> agent");
       await processMessage(
         text ?? "",
         event.channel,
-        threadTs,
+        undefined,
         { kind: "image", imageBase64: base64, mimeType, text },
-        true
       );
       return;
     }
 
-    // 有文件但不是 file_share subtype（正常情况下不该发生），跳过
-    if ((event as any).files?.length > 0 && event.subtype !== "file_share") {
-      // log.info("handleDirectMessage", "files present but not file_share, skipping");
-      return;
-    }
+    if ((event as any).files?.length > 0 && event.subtype !== "file_share") return;
+    if (!event.text?.trim()) return;
 
-    if (!event.text?.trim()) { /* log.info("handleDirectMessage", "skipped: empty text"); */ return; }
-
-    // log.info("handleDirectMessage", "processing DM -> agent");
-    await processMessage(event.text.trim(), event.channel, undefined, undefined, true);
+    await processMessage(event.text.trim(), event.channel, undefined);
   }
 
   async function processMessage(
     text: string,
     slackChannel: string,
     threadTs: string | undefined,
-    overrideMessage?: InputMessage, // 非 text 消息时传入（如 kind:"image"）
-    isDm?: boolean
+    overrideMessage?: InputMessage,
   ) {
     const key = streamKey(slackChannel, threadTs);
 
-    // emit 双重分发：
-    // - 全部事件 → broadcastSse（Web UI 可见所有 node/tool/final/error）
-    // - channel（@mention）→ Slack thread 流式回复
-    // - DM → 直接 postMessage（chat.startStream 强制要求 thread_ts，会创建 thread）
+    // 预先创建流式消息，确保后续所有更新都走 chat.update
+    let initTs: string | undefined;
+    try {
+      const result = await slackClient.chat.postMessage({
+        channel: slackChannel,
+        text: "⏳ 正在思考中...",
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      });
+      initTs = result.ts ?? undefined;
+    } catch (err) {
+      log.error("processMessage", "init postMessage failed:", err);
+    }
+
+    if (initTs) {
+      activeStreams.set(key, {
+        ts: initTs,
+        channel: slackChannel,
+        buffer: "",
+        displayedText: "",
+        lastSyncedText: "",
+        timer: null,
+        flushing: false,
+      });
+    }
+
     function toolStatusText(payload: { name: string; status: string }): string {
       const { name, status } = payload;
       if (status === "executing") return `🔧 正在调用工具: ${name}...`;
@@ -338,45 +344,23 @@ export function createSlackTransport(options: {
 
       if (event.type === "tool") {
         const msg = toolStatusText(event.payload);
-        if (isDm) {
-          slackClient.chat.postMessage({ channel: slackChannel, text: msg })
-            .catch(err => log.error("postMessage", "failed:", err));
+        const state = activeStreams.get(key);
+        if (state) {
+          state.displayedText += "\n" + msg;
+          // 统一走 flushStream，避免 syncDisplayedText 与 flushStream 并发竞争
+          scheduleFlush(key, 0);
         } else {
-          const state = activeStreams.get(key);
-          if (state && state.ts) {
-            slackClient.chat.appendStream({
-              channel: slackChannel,
-              ts: state.ts,
-              markdown_text: msg,
-            }).catch(err => log.error("appendStream", "tool status failed:", err));
-          } else {
-            slackClient.chat.postMessage({
-              channel: slackChannel,
-              text: msg,
-              ...(threadTs ? { thread_ts: threadTs } : {})
-            }).catch(err => log.error("postMessage", "failed:", err));
-          }
-        }
-        return;
-      }
-
-      if (isDm) {
-        if (event.type === "final") {
           slackClient.chat.postMessage({
             channel: slackChannel,
-            text: event.payload.text,
-          }).catch(err => log.error("postMessage", "failed:", err));
-        } else if (event.type === "error") {
-          slackClient.chat.postMessage({
-            channel: slackChannel,
-            text: `处理失败：${event.payload.message}`,
-          }).catch(err => log.error("postMessage", "failed:", err));
+            text: msg,
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+          }).catch(err => log.error("postMessage", "tool status failed:", err));
         }
         return;
       }
 
       if (event.type === "token") {
-        handleSlackToken(key, slackChannel, event.payload.text, threadTs);
+        handleSlackToken(key, event.payload.text);
       } else if (event.type === "final") {
         handleSlackFinal(key, slackChannel, event.payload.text, threadTs);
       } else if (event.type === "error") {
@@ -385,15 +369,13 @@ export function createSlackTransport(options: {
     };
 
     try {
-      // log.info("processMessage", "calling agent.handleUserMessage...");
       const message: InputMessage = overrideMessage ?? { kind: "text", text };
       await agent.handleUserMessage({
         sessionId: DEFAULT_SESSION_ID,
-        message, // 使用构造好的 message 而非硬编码 kind:"text"
+        message,
         emit,
         channel: "slack"
       });
-      // log.info("processMessage", "agent.handleUserMessage done");
     } catch (err) {
       log.error("processMessage", "Agent execution failed:", err);
     }
