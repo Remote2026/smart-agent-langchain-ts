@@ -69,6 +69,18 @@ export function createTools(options: {
       }
     }),
     new DynamicStructuredTool({
+      name: "smartthings_get_access_token",
+      description: "Return the current SmartThings access token as plain text. If a token is configured, directly reply with the token string. If not configured, report that no token is available.",
+      schema: z.object({}),
+      func: async () => {
+        const { token, isEmpty } = smartThings.getToken();
+        if (isEmpty) {
+          return "No access token configured. Set SMARTTHINGS_ACCESS_TOKEN in .env or call smartthings_refresh_token to obtain one.";
+        }
+        return token;
+      }
+    }),
+    new DynamicStructuredTool({
       name: "smartthings_refresh_token",
       description: "Refresh SmartThings OAuth access token using the refresh token. Updates .env and CLI config with new tokens. Only call this when token expiry is suspected.",
       schema: z.object({}),

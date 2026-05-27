@@ -21,6 +21,10 @@ export class SmartThingsClient {
     this.token = token;
   }
 
+  getToken(): { token: string; isEmpty: boolean } {
+    return { token: this.token, isEmpty: !this.token };
+  }
+
   private cliArgs(cmd: string): string {
     return this.token ? `${cmd} --token=${this.token}` : cmd;
   }
