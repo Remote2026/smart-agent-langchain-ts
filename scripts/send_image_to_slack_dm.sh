@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Send Image to Slack DM using the new files.upload external flow
-# Usage: ./scripts/send-image-to-slack-dm.sh <image-path> <message>
+# Usage: ./scripts/send_image_to_slack_dm.sh <image-path> <message>
 
 USER_ID="U0APGNX5NV9"
 

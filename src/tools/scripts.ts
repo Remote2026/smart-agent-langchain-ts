@@ -39,7 +39,7 @@ Call this tool FIRST when the user asks to "start patrol", "begin patrol", "patr
 This is step 1 of the patrol sequence.`,
       schema: z.object({}),
       func: async () => {
-        return runScript("start-water.sh");
+        return runScript("start_water.sh");
       }
     }),
 
@@ -50,7 +50,7 @@ Call this tool SECOND, only AFTER robot_water_on has completed successfully, whe
 This is step 2 of the patrol sequence.`,
       schema: z.object({}),
       func: async () => {
-        return runScript("start-clean.sh");
+        return runScript("start_clean.sh");
       }
     })
   ];
