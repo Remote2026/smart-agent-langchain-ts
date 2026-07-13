@@ -7,3 +7,4 @@ checkpoints.db*
 .claude/settings.local.json
 __pycache__/
 *.pyc
+scripts/photos/
