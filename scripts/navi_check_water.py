@@ -283,8 +283,12 @@ class _ImageSubscriber(Node):
         while self._image is None and time.monotonic() - start < timeout_sec:
             rclpy.spin_once(self, timeout_sec=0.1)
         if self._image is None:
+            topic = self._subscription.topic_name
             raise TimeoutError(
-                f"Timeout waiting for image on topic {self._subscription.topic_name}"
+                f"No image received on ROS2 topic '{topic}' within {timeout_sec}s. "
+                "Common causes: the camera node is not running, the topic name is wrong, "
+                "ROS2 daemon/network is down, or the publisher is silent. "
+                f"Verify with: ros2 topic list | grep {topic.split('/')[-1]} && ros2 topic hz {topic}"
             )
         return self._image
 
@@ -371,9 +375,30 @@ def navigate_to_target() -> None:
 def main() -> int:
     try:
         navigate_to_target()
+    except FileNotFoundError as exc:
+        print(f"📁 Navigation setup error: {exc}", file=sys.stderr)
+        print("Hint: make sure scripts/navigate_to.sh exists and is executable.", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as exc:
+        print(f"🧭 Navigation command failed: {exc}", file=sys.stderr)
+        print("Hint: check that the robot's navigation stack is running and reachable.", file=sys.stderr)
+        return 1
+    except RuntimeError as exc:
+        print(f"🧭 Navigation failed: {exc}", file=sys.stderr)
+        return 1
+
+    try:
         decision = capture_and_decide()
+    except TimeoutError as exc:
+        print(f"⏱️ Photo capture timeout: {exc}", file=sys.stderr)
+        print("Hint: verify the camera is publishing and the topic name matches PLANT_ROS2_IMAGE_TOPIC.", file=sys.stderr)
+        return 1
+    except RuntimeError as exc:
+        print(f"📷 Photo capture error: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
-        print(f"Navigation, capture, or recognition failed: {exc}", file=sys.stderr)
+        print(f"❌ Vision recognition failed: {exc}", file=sys.stderr)
+        print("Hint: check the Qwen/DashScope API key and network connectivity.", file=sys.stderr)
         return 1
 
     needs_water = True  # DEMO mode: always start watering
