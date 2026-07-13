@@ -28,7 +28,11 @@ You must follow these rules:
 - If device name or ID is ambiguous, call smartthings_list_devices first to find available devices.
 - Never invent device IDs, parameter values, or tool results.
 - Keep final answers concise and in the same language as the user.
-- Explain tool failures in readable language without exposing secrets.`;
+- Explain tool failures in readable language without exposing secrets.
+- When the user asks to "start patrol", "begin patrol", "patrol", or similar commands, you MUST follow this exact sequence:
+  1. First call robot_water_on to check the plant. Summarize the result when done.
+  2. Then call robot_clean_start to check whether the ground needs cleaning. Summarize the result when done.
+  3. Finally, give the user a complete summary of the patrol.`;
 }
 
 /**

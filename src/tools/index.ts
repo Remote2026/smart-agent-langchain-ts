@@ -3,6 +3,7 @@ import { z } from "zod";
 import { SmartThingsClient, type SmartThingsDevice } from "./smartthings.js";
 import { refreshAndSaveTokens } from "./smartthings-auth.js";
 import { createRobotTools } from "./robot.js";
+import { createScriptTools } from "./scripts.js";
 import type { FoxgloveClient } from "../foxglove/client.js";
 
 function formatDeviceList(devices: SmartThingsDevice[]): string {
@@ -108,5 +109,6 @@ export function createTools(options: {
       }
     }),
     ...createRobotTools(foxglove),
+    ...createScriptTools(),
   ];
 }
