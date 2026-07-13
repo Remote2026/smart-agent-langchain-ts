@@ -98,14 +98,15 @@ export function createSlackNotifier(
       return;
     }
 
+    const displayedTextAtStart = state.displayedText;
     const hasBuffer = !!state.buffer;
-    const hasPendingUpdate = state.displayedText !== state.lastSyncedText;
+    const hasPendingUpdate = displayedTextAtStart !== state.lastSyncedText;
     if (!hasBuffer && !hasPendingUpdate) return;
 
     state.flushing = true;
 
     const parts: string[] = [];
-    if (state.displayedText) parts.push(state.displayedText);
+    if (displayedTextAtStart) parts.push(displayedTextAtStart);
     if (state.buffer) parts.push(state.buffer);
     const textToSend = parts.join("\n\n");
 
@@ -117,7 +118,7 @@ export function createSlackNotifier(
         text: closeMarkdown(textToSend),
       });
       log.debug("flushBuffer", "chat.update ok");
-      state.lastSyncedText = state.displayedText;
+      state.lastSyncedText = displayedTextAtStart;
     } catch (err: any) {
       if (err.data?.error === "rate_limited" || err.statusCode === 429) {
         const retryAfter = (err.data?.retry_after || 1) * 1000;
@@ -132,9 +133,9 @@ export function createSlackNotifier(
     } finally {
       state.buffer = "";
       state.flushing = false;
-      if (state.finalText) {
-        scheduleFlush(threadTs);
-      } else if (state.buffer && !state.timer) {
+      // 异步期间 displayedText 可能变化，需要补刷
+      const needsFlush = state.displayedText !== state.lastSyncedText || state.buffer || state.finalText;
+      if (needsFlush && !state.timer) {
         scheduleFlush(threadTs);
       }
     }
@@ -235,48 +236,23 @@ export function createSlackNotifier(
   async function streamFinal(text: string, threadTs?: string) {
     if (!threadTs) return;
 
-    let state = activeStreams.get(threadTs);
-    if (!state) {
-      await mirrorWebFinal(text, threadTs);
-      return;
-    }
-
-    if (state.startPromise) {
+    const state = activeStreams.get(threadTs);
+    if (state?.startPromise) {
       await state.startPromise;
-      state = activeStreams.get(threadTs);
-      if (!state) {
-        await mirrorWebFinal(text, threadTs);
-        return;
+    }
+
+    const currentState = activeStreams.get(threadTs);
+    if (currentState) {
+      if (currentState.timer) {
+        clearTimeout(currentState.timer);
+        currentState.timer = null;
       }
+      currentState.buffer = "";
+      activeStreams.delete(threadTs);
     }
 
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-
-    state.buffer = "";
-
-    const parts: string[] = [];
-    if (state.displayedText) parts.push(state.displayedText);
-    parts.push(text);
-    const finalText = parts.join("\n\n");
-
-    if (state.ts) {
-      try {
-        log.debug("streamFinal", "chat.update final", { channel: defaultChannelId, ts: state.ts, textLen: finalText.length });
-        await client.chat.update({
-          channel: defaultChannelId,
-          ts: state.ts,
-          text: closeMarkdown(finalText),
-        });
-        log.debug("streamFinal", "chat.update final ok");
-      } catch (err) {
-        log.error("streamFinal", "final update failed:", err);
-      }
-    }
-
-    activeStreams.delete(threadTs);
+    // final summary 作为 thread 里的全新消息发出，不覆盖包含工具状态的流式消息
+    await mirrorWebFinal(text, threadTs);
   }
 
   async function streamError(message: string, threadTs?: string) {
@@ -328,8 +304,13 @@ export function createSlackNotifier(
     const state = activeStreams.get(threadTs);
     if (state && state.ts) {
       state.displayedText += "\n" + msg;
-      // 统一走 flushBuffer，避免并发竞争
-      scheduleFlush(threadTs, 0);
+      if (payload.status === "executing") {
+        // executing 状态立即刷新，让用户在工具执行期间看到 Calling tool...
+        flushBuffer(threadTs);
+      } else {
+        // ok/error 状态走 debounce
+        scheduleFlush(threadTs, 0);
+      }
     } else {
       log.debug("streamToolStatus", `postMessage (no stream): ${msg}`);
       client.chat.postMessage({

@@ -76,8 +76,10 @@ export function createSlackTransport(options: {
     const state = activeStreams.get(key);
     if (!state || state.flushing) return;
 
+    // 在异步发送前快照 displayedText，避免发送期间新 tool 状态被误判为已同步
+    const displayedTextAtStart = state.displayedText;
     const hasBuffer = !!state.buffer;
-    const hasPendingUpdate = state.displayedText !== state.lastSyncedText;
+    const hasPendingUpdate = displayedTextAtStart !== state.lastSyncedText;
     if (!hasBuffer && !hasPendingUpdate) return;
 
     state.flushing = true;
@@ -85,7 +87,7 @@ export function createSlackTransport(options: {
     // displayedText 只维护 tool 状态，buffer 是临时 token
     // 发送时组合，但不把 buffer 持久化到 displayedText
     const parts: string[] = [];
-    if (state.displayedText) parts.push(state.displayedText);
+    if (displayedTextAtStart) parts.push(displayedTextAtStart);
     if (state.buffer) parts.push(state.buffer);
     const textToSend = parts.join("\n\n");
 
@@ -97,7 +99,7 @@ export function createSlackTransport(options: {
         text: closeMarkdown(textToSend),
       });
       log.debug("flushStream", "chat.update ok");
-      state.lastSyncedText = state.displayedText;
+      state.lastSyncedText = displayedTextAtStart;
     } catch (err: any) {
       if (err.data?.error === "rate_limited" || err.statusCode === 429) {
         const retryAfter = (err.data?.retry_after || 1) * 1000;
@@ -112,7 +114,9 @@ export function createSlackTransport(options: {
     } finally {
       state.buffer = "";
       state.flushing = false;
-      if (state.buffer && !state.timer) {
+      // 异步期间 displayedText 可能变化，需要补刷
+      const needsFlush = state.displayedText !== state.lastSyncedText || state.buffer;
+      if (needsFlush && !state.timer) {
         scheduleFlush(key);
       }
     }
@@ -138,41 +142,27 @@ export function createSlackTransport(options: {
 
   async function handleSlackFinal(key: string, channel: string, text: string, threadTs?: string) {
     const state = activeStreams.get(key);
-    if (!state) {
+    if (state) {
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      state.buffer = "";
+      activeStreams.delete(key);
+    }
+
+    // final summary 作为一条全新消息发出，不覆盖包含工具状态的流式消息
+    try {
+      log.debug("handleSlackFinal", "chat.postMessage final", { channel, threadTs, textLen: text.length });
       await slackClient.chat.postMessage({
         channel,
         text,
         ...(threadTs ? { thread_ts: threadTs } : {}),
-      }).catch(err => log.error("postMessage", "failed:", err));
-      return;
-    }
-
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-
-    state.buffer = "";
-
-    // 组合 tool 状态 + final text，不保留流式 token 累积
-    const parts: string[] = [];
-    if (state.displayedText) parts.push(state.displayedText);
-    parts.push(text);
-    const finalText = parts.join("\n\n");
-
-    try {
-      log.debug("handleSlackFinal", "chat.update final", { channel: state.channel, ts: state.ts, textLen: finalText.length });
-      await slackClient.chat.update({
-        channel: state.channel,
-        ts: state.ts,
-        text: closeMarkdown(finalText),
       });
-      log.debug("handleSlackFinal", "chat.update final ok");
+      log.debug("handleSlackFinal", "chat.postMessage final ok");
     } catch (err) {
-      log.error("handleSlackFinal", "final update failed:", err);
+      log.error("handleSlackFinal", "final post failed:", err);
     }
-
-    activeStreams.delete(key);
   }
 
   async function handleSlackError(key: string, channel: string, message: string, threadTs?: string) {
@@ -347,8 +337,13 @@ export function createSlackTransport(options: {
         const state = activeStreams.get(key);
         if (state) {
           state.displayedText += "\n" + msg;
-          // 统一走 flushStream，避免 syncDisplayedText 与 flushStream 并发竞争
-          scheduleFlush(key, 0);
+          if (event.payload.status === "executing") {
+            // executing 状态立即刷新，让用户在工具执行期间看到 Calling tool...
+            flushStream(key);
+          } else {
+            // ok/error 状态走 debounce，避免多个快速完成的 tool 产生频繁 update
+            scheduleFlush(key, 0);
+          }
         } else {
           slackClient.chat.postMessage({
             channel: slackChannel,

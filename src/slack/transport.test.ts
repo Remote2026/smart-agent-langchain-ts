@@ -110,7 +110,7 @@ describe("createSlackTransport", () => {
       expect(broadcastSse).toHaveBeenCalledWith(expect.objectContaining({ channel: "slack", type: "tool" }));
     });
 
-    it("sends final events to Slack via chat.update for DM", async () => {
+    it("sends final events to Slack as a new message for DM", async () => {
       const { transport, agent, slackClient } = makeTransport();
 
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
@@ -126,13 +126,43 @@ describe("createSlackTransport", () => {
         })
       );
       expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.not.objectContaining({ thread_ts: expect.anything() })
-      );
-      expect(slackClient.chat.update).toHaveBeenCalledWith(
         expect.objectContaining({
           channel: "D2",
-          ts: "123.456",
           text: "done!",
+        })
+      );
+      expect(slackClient.chat.update).not.toHaveBeenCalled();
+    });
+
+    it("flushes tool executing status immediately so it shows before completion", async () => {
+      const { transport, agent, slackClient } = makeTransport();
+
+      (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
+        input.emit({ sessionId: "s1", channel: "slack", type: "tool", payload: { name: "smartthings_list_devices", status: "executing" } } as ChatEventOut);
+        input.emit({ sessionId: "s1", channel: "slack", type: "tool", payload: { name: "smartthings_list_devices", status: "ok" } } as ChatEventOut);
+      });
+
+      await transport.handleDirectMessage({ text: "test", channel: "D6", ts: "6" });
+
+      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "D6",
+          text: "⏳ Thinking...",
+        })
+      );
+      await vi.waitFor(() => expect(slackClient.chat.update).toHaveBeenCalledTimes(2));
+      expect(slackClient.chat.update).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({
+          channel: "D6",
+          ts: "123.456",
+          text: expect.stringContaining("🔧 Calling tool: smartthings_list_devices..."),
+        })
+      );
+      expect(slackClient.chat.update).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({
+          channel: "D6",
+          ts: "123.456",
+          text: expect.stringContaining("✅ Tool smartthings_list_devices completed"),
         })
       );
     });
