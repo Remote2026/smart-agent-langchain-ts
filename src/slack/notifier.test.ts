@@ -64,6 +64,78 @@ describe("createSlackNotifier", () => {
     });
   });
 
+  it("streamToken posts a Thinking... message on first call", async () => {
+    const client = makeClient();
+    const notifier = createSlackNotifier(client, channelId);
+
+    await notifier.streamToken("tok", "thread.3");
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith({
+      channel: channelId,
+      text: "⏳ Thinking...",
+      thread_ts: "thread.3"
+    });
+  });
+
+  it("streamToken does not post duplicate Thinking... messages", async () => {
+    const client = makeClient();
+    const notifier = createSlackNotifier(client, channelId);
+
+    await notifier.streamToken("a", "thread.4");
+    await notifier.streamToken("b", "thread.4");
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("streamToolStatus posts tool statuses as separate messages", async () => {
+    const client = makeClient();
+    const notifier = createSlackNotifier(client, channelId);
+
+    notifier.streamToolStatus({ name: "smartthings_list_devices", status: "executing" }, "thread.5");
+    notifier.streamToolStatus({ name: "smartthings_list_devices", status: "ok" }, "thread.5");
+
+    await vi.waitFor(() => expect(client.chat.postMessage).toHaveBeenCalledTimes(3));
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(1,
+      expect.objectContaining({ channel: channelId, text: "⏳ Thinking...", thread_ts: "thread.5" })
+    );
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(2,
+      expect.objectContaining({ channel: channelId, text: "🔧 Calling tool: smartthings_list_devices...", thread_ts: "thread.5" })
+    );
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(3,
+      expect.objectContaining({ channel: channelId, text: "✅ Tool smartthings_list_devices completed", thread_ts: "thread.5" })
+    );
+  });
+
+  it("streamFinal posts final as a new message", async () => {
+    const client = makeClient();
+    const notifier = createSlackNotifier(client, channelId);
+
+    await notifier.streamFinal("done!", "thread.6");
+
+    await vi.waitFor(() => expect(client.chat.postMessage).toHaveBeenCalledTimes(2));
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(1,
+      expect.objectContaining({ channel: channelId, text: "⏳ Thinking...", thread_ts: "thread.6" })
+    );
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(2,
+      expect.objectContaining({ channel: channelId, text: "Agent: done!", thread_ts: "thread.6" })
+    );
+  });
+
+  it("streamError posts error as a new message", async () => {
+    const client = makeClient();
+    const notifier = createSlackNotifier(client, channelId);
+
+    await notifier.streamError("boom", "thread.7");
+
+    await vi.waitFor(() => expect(client.chat.postMessage).toHaveBeenCalledTimes(2));
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(1,
+      expect.objectContaining({ channel: channelId, text: "⏳ Thinking...", thread_ts: "thread.7" })
+    );
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(2,
+      expect.objectContaining({ channel: channelId, text: "Failed: boom", thread_ts: "thread.7" })
+    );
+  });
+
   it("mirrorWebUserMessage returns undefined on API failure", async () => {
     const client = makeClient();
     client.chat.postMessage.mockRejectedValueOnce(new Error("network error"));

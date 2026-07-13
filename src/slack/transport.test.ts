@@ -32,14 +32,15 @@ function makeTransport() {
 describe("createSlackTransport", () => {
   describe("handleAppMention", () => {
     it("skips events from bot itself", async () => {
-      const { transport } = makeTransport();
+      const { transport, agent } = makeTransport();
       await transport.handleAppMention({ text: "hello", channel: "C1", ts: "1", bot_id: "B1" });
-      // No error, just returns — verified by no agent call below
+      expect(agent.handleUserMessage).not.toHaveBeenCalled();
     });
 
     it("skips events with subtype", async () => {
-      const { transport } = makeTransport();
+      const { transport, agent } = makeTransport();
       await transport.handleAppMention({ text: "hello", channel: "C1", ts: "1", subtype: "message_changed" });
+      expect(agent.handleUserMessage).not.toHaveBeenCalled();
     });
 
     it("skips empty text after removing mention tags", async () => {
@@ -63,13 +64,15 @@ describe("createSlackTransport", () => {
 
   describe("handleDirectMessage", () => {
     it("skips bot messages", async () => {
-      const { transport } = makeTransport();
+      const { transport, agent } = makeTransport();
       await transport.handleDirectMessage({ text: "hi", channel: "D1", ts: "1", bot_id: "B1" });
+      expect(agent.handleUserMessage).not.toHaveBeenCalled();
     });
 
     it("skips subtype events", async () => {
-      const { transport } = makeTransport();
+      const { transport, agent } = makeTransport();
       await transport.handleDirectMessage({ text: "hi", channel: "D1", ts: "1", subtype: "message_deleted" });
+      expect(agent.handleUserMessage).not.toHaveBeenCalled();
     });
 
     it("skips empty text", async () => {
@@ -95,7 +98,6 @@ describe("createSlackTransport", () => {
     it("broadcasts all event types to SSE", async () => {
       const { transport, agent, broadcastSse } = makeTransport();
 
-      // Capture the emit function passed to handleUserMessage
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
         input.emit({ sessionId: "s1", channel: "slack", type: "status", payload: { status: "thinking" } } as ChatEventOut);
         input.emit({ sessionId: "s1", channel: "slack", type: "node", payload: { node: "ingest", phase: "start", summary: "ok" } } as ChatEventOut);
@@ -110,64 +112,34 @@ describe("createSlackTransport", () => {
       expect(broadcastSse).toHaveBeenCalledWith(expect.objectContaining({ channel: "slack", type: "tool" }));
     });
 
-    it("sends final events to Slack as a new message for DM", async () => {
-      const { transport, agent, slackClient } = makeTransport();
-
-      (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
-        input.emit({ sessionId: "s1", channel: "slack", type: "final", payload: { text: "done!" } } as ChatEventOut);
-      });
-
-      await transport.handleDirectMessage({ text: "test", channel: "D2", ts: "2" });
-
-      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "D2",
-          text: "⏳ Thinking...",
-        })
-      );
-      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "D2",
-          text: "done!",
-        })
-      );
-      expect(slackClient.chat.update).not.toHaveBeenCalled();
-    });
-
-    it("flushes tool executing status immediately so it shows before completion", async () => {
+    it("posts thinking, tool statuses and final as separate messages", async () => {
       const { transport, agent, slackClient } = makeTransport();
 
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
         input.emit({ sessionId: "s1", channel: "slack", type: "tool", payload: { name: "smartthings_list_devices", status: "executing" } } as ChatEventOut);
         input.emit({ sessionId: "s1", channel: "slack", type: "tool", payload: { name: "smartthings_list_devices", status: "ok" } } as ChatEventOut);
+        input.emit({ sessionId: "s1", channel: "slack", type: "final", payload: { text: "done!" } } as ChatEventOut);
       });
 
-      await transport.handleDirectMessage({ text: "test", channel: "D6", ts: "6" });
+      await transport.handleDirectMessage({ text: "test", channel: "D2", ts: "2" });
 
-      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "D6",
-          text: "⏳ Thinking...",
-        })
+      await vi.waitFor(() => expect(slackClient.chat.postMessage).toHaveBeenCalledTimes(4));
+      expect(slackClient.chat.update).not.toHaveBeenCalled();
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ channel: "D2", text: "⏳ Thinking..." })
       );
-      await vi.waitFor(() => expect(slackClient.chat.update).toHaveBeenCalledTimes(2));
-      expect(slackClient.chat.update).toHaveBeenNthCalledWith(1,
-        expect.objectContaining({
-          channel: "D6",
-          ts: "123.456",
-          text: expect.stringContaining("🔧 Calling tool: smartthings_list_devices..."),
-        })
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ channel: "D2", text: "🔧 Calling tool: smartthings_list_devices..." })
       );
-      expect(slackClient.chat.update).toHaveBeenNthCalledWith(2,
-        expect.objectContaining({
-          channel: "D6",
-          ts: "123.456",
-          text: expect.stringContaining("✅ Tool smartthings_list_devices completed"),
-        })
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(3,
+        expect.objectContaining({ channel: "D2", text: "✅ Tool smartthings_list_devices completed" })
+      );
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(4,
+        expect.objectContaining({ channel: "D2", text: "done!" })
       );
     });
 
-    it("sends error events to Slack via chat.update for DM", async () => {
+    it("posts error as a new message", async () => {
       const { transport, agent, slackClient } = makeTransport();
 
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
@@ -176,35 +148,31 @@ describe("createSlackTransport", () => {
 
       await transport.handleDirectMessage({ text: "test", channel: "D3", ts: "3" });
 
-      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "D3",
-          text: "⏳ Thinking...",
-        })
+      await vi.waitFor(() => expect(slackClient.chat.postMessage).toHaveBeenCalledTimes(2));
+      expect(slackClient.chat.update).not.toHaveBeenCalled();
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ channel: "D3", text: "⏳ Thinking..." })
       );
-      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.not.objectContaining({ thread_ts: expect.anything() })
-      );
-      expect(slackClient.chat.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "D3",
-          ts: "123.456",
-          text: "Failed: boom",
-        })
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ channel: "D3", text: "Failed: boom" })
       );
     });
 
-    it("does NOT send status/node events to Slack via chat.update", async () => {
+    it("does NOT send status/node/token events to Slack", async () => {
       const { transport, agent, slackClient } = makeTransport();
 
       (agent.handleUserMessage as any).mockImplementation(async (input: any) => {
         input.emit({ sessionId: "s1", channel: "slack", type: "status", payload: { status: "thinking" } } as ChatEventOut);
         input.emit({ sessionId: "s1", channel: "slack", type: "node", payload: { node: "ingest", phase: "start", summary: "ok" } } as ChatEventOut);
+        input.emit({ sessionId: "s1", channel: "slack", type: "token", payload: { text: "hi" } } as ChatEventOut);
       });
 
       await transport.handleDirectMessage({ text: "test", channel: "D4", ts: "4" });
 
-      expect(slackClient.chat.postMessage).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(slackClient.chat.postMessage).toHaveBeenCalledTimes(1));
+      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "D4", text: "⏳ Thinking..." })
+      );
       expect(slackClient.chat.update).not.toHaveBeenCalled();
     });
 
@@ -217,8 +185,12 @@ describe("createSlackTransport", () => {
 
       await transport.handleAppMention({ text: "test", channel: "C5", ts: "ts.999" });
 
-      expect(slackClient.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ thread_ts: "ts.999" })
+      await vi.waitFor(() => expect(slackClient.chat.postMessage).toHaveBeenCalledTimes(2));
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ channel: "C5", text: "⏳ Thinking...", thread_ts: "ts.999" })
+      );
+      expect(slackClient.chat.postMessage).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ channel: "C5", text: "ok", thread_ts: "ts.999" })
       );
     });
   });
