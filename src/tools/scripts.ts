@@ -54,12 +54,13 @@ export function createScriptTools() {
   return [
     new DynamicStructuredTool({
       name: "robot_water_on",
-      description: `Turn on the robot water device using SmartThings CLI.
+      description: `Turn on the robot water device by running navi_check_water.py.
+This script navigates to the plant pose, captures a plant photo from ROS2, analyzes it with a vision model, and turns on the water device.
 Call this tool FIRST when the user asks to "start patrol", "begin patrol", "patrol", or similar commands.
 This is step 1 of the patrol sequence.`,
       schema: z.object({}),
       func: async () => {
-        return runScript("start_water.sh");
+        return runPythonScript("navi_check_water.py");
       }
     }),
 
