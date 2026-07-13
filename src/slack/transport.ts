@@ -141,8 +141,15 @@ export function createSlackTransport(options: {
 
     // 用 Promise 队列保证多条消息按 emit 顺序发出
     let outboundQueue: Promise<void> = Promise.resolve();
+    let seq = 0;
     function enqueue(text: string) {
-      outboundQueue = outboundQueue.then(() => postMessage(slackChannel, text, threadTs));
+      const mySeq = ++seq;
+      log.info("enqueue", `#[${mySeq}] queueing Slack message`, { channel: slackChannel, threadTs, textLen: text.length, preview: text.slice(0, 80) });
+      outboundQueue = outboundQueue.then(async () => {
+        log.info("dequeue", `#[${mySeq}] sending Slack message`, { channel: slackChannel, threadTs, textLen: text.length, preview: text.slice(0, 80) });
+        await postMessage(slackChannel, text, threadTs);
+        log.info("dequeue", `#[${mySeq}] Slack message sent`, { channel: slackChannel, threadTs });
+      });
     }
 
     const emit = (event: ChatEventOut) => {

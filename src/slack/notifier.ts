@@ -44,6 +44,7 @@ export function createSlackNotifier(
   const thinkingPosted = new Set<string>();
   // 按 thread 串行发送，保证消息顺序
   const outboundQueues = new Map<string, Promise<void>>();
+  const seqByThread = new Map<string, number>();
 
   async function postMessage(channel: string, text: string, threadTs?: string) {
     try {
@@ -59,8 +60,15 @@ export function createSlackNotifier(
 
   function enqueue(threadTs: string | undefined, text: string) {
     if (!threadTs) return;
+    const seq = (seqByThread.get(threadTs) ?? 0) + 1;
+    seqByThread.set(threadTs, seq);
+    log.info("enqueue", `#[${threadTs}:${seq}] queueing Slack message`, { channel: defaultChannelId, threadTs, textLen: text.length, preview: text.slice(0, 80) });
     const queue = outboundQueues.get(threadTs) ?? Promise.resolve();
-    outboundQueues.set(threadTs, queue.then(() => postMessage(defaultChannelId, text, threadTs)));
+    outboundQueues.set(threadTs, queue.then(async () => {
+      log.info("dequeue", `#[${threadTs}:${seq}] sending Slack message`, { channel: defaultChannelId, threadTs, textLen: text.length, preview: text.slice(0, 80) });
+      await postMessage(defaultChannelId, text, threadTs);
+      log.info("dequeue", `#[${threadTs}:${seq}] Slack message sent`, { channel: defaultChannelId, threadTs });
+    }));
   }
 
   function ensureThinking(threadTs: string | undefined) {
