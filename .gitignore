@@ -5,3 +5,5 @@ npm-debug.log*
 logs/*
 checkpoints.db*
 .claude/settings.local.json
+__pycache__/
+*.pyc

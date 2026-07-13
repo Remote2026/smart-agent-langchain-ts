@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Navigate to the cleaning spot, capture a floor photo, and start the vacuum (demo mode).
 
-This script is triggered by the user asking "地上有垃圾吗？". It first navigates
+This script is triggered by the user asking about floor garbage. It first navigates
 to a fixed pose, then takes a photo and sends it to a vision model for display/logging.
 In demo mode the robot vacuum is always started regardless of the recognition result.
 """
@@ -58,56 +58,74 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 
 
-# Locate sibling skills under workspace/skills/
+# Locate project root and scripts directory.
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
-_WORKSPACE_SKILLS = _SKILL_ROOT.parent
-_START_SCRIPT = _SKILL_ROOT / "scripts" / "start-clean.sh"
-_NAVIGATE_SCRIPT = _WORKSPACE_SKILLS / "navigate_to.sh"
+_SCRIPTS_DIR = _SKILL_ROOT / "scripts"
+_START_SCRIPT = _SCRIPTS_DIR / "start_clean.sh"
+_NAVIGATE_SCRIPT = _SCRIPTS_DIR / "navigate_to.sh"
+_ENV_FILE = _SKILL_ROOT / ".env"
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    """Parse a simple KEY=VALUE .env file into a dict."""
+    env: dict[str, str] = {}
+    if not path.exists():
+        return env
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key.strip()] = value.strip()
+    return env
+
+
+_ENV = _load_env_file(_ENV_FILE)
 
 # ROS2 topic that publishes the RealSense color image.
 _ROS2_IMAGE_TOPIC = os.environ.get("VACUUM_ROS2_IMAGE_TOPIC", "/camera/camera/color/image_raw")
 
-# Qwen vision API defaults (mirrors realsense-photo/scripts/capture.py)
-_DEFAULT_QWEN_MODEL = "qwen3-vl-flash"
-_DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-_DEFAULT_QWEN_API_KEY = "sk-f5af5770e2b84ed1bc63afa1db6acb4f"
+# Qwen vision API defaults (prefer project .env, then environment, then hardcoded fallback)
+_DEFAULT_QWEN_MODEL = _ENV.get("OPENAI_MODEL", os.environ.get("QWEN_MODEL", "qwen3-vl-flash"))
+_DEFAULT_QWEN_BASE_URL = _ENV.get("OPENAI_BASE_URL", os.environ.get("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"))
+_DEFAULT_QWEN_API_KEY = _ENV.get("OPENAI_API_KEY", os.environ.get("DASHSCOPE_API_KEY", "sk-f5af5770e2b84ed1bc63afa1db6acb4f"))
 
-# Prompt used by the vision model. It asks for a short Chinese conclusion plus
+# Prompt used by the vision model. It asks for a short English conclusion plus
 # an ACTION marker so the decision is unambiguous and the vacuum starts directly
 # when it is safe to do so.
-_VACUUM_CHECK_PROMPT = """你是一台扫地机器人的调度助手。当前为 DEMO 模式，无论照片中地板上有什么，最终都必须启动扫地机。
+_VACUUM_CHECK_PROMPT = """You are a robot vacuum scheduler assistant. This is DEMO mode: regardless of what is on the floor in the photo, the vacuum must be started eventually.
 
-请分析这张地板照片，描述地上是否有垃圾、是什么垃圾，然后给出结论。
+Please analyze this floor photo, describe whether there is garbage, what kind of garbage it is, and then give a conclusion.
 
-输出格式要求：
-1. 先给出一句简短的中文结论，说明地上有什么、当前处于 DEMO 模式。
-2. 最后一行必须是：
+Output format requirements:
+1. First give a short English conclusion explaining what is on the floor and that DEMO mode is active.
+2. The last line must be:
    ACTION: START_VACUUM
 
-示例 1：
-地上有少量灰尘和细小碎屑，DEMO 模式将启动扫地机。
+Example 1:
+There is a small amount of dust and fine debris on the floor. DEMO mode will start the vacuum.
 ACTION: START_VACUUM
 
-示例 2：
-地上有湿纸巾和纸团，normally 不建议启动，但当前为 DEMO 模式，仍启动扫地机。
+Example 2:
+There are wet wipes and paper balls on the floor. Normally it is not recommended to start, but DEMO mode is active, so the vacuum will still be started.
 ACTION: START_VACUUM
 
-示例 3：
-地上没有明显垃圾，DEMO 模式仍启动扫地机。
+Example 3:
+There is no obvious garbage on the floor. DEMO mode will still start the vacuum.
 ACTION: START_VACUUM
 
-请严格按以上格式输出，不要反问用户，不要请求确认。
+Please strictly follow the format above. Do not ask the user questions or request confirmation.
 """
 
 
 def _find_start_script() -> Path:
-    """Return the path to start-clean.sh."""
+    """Return the path to start_clean.sh."""
     override = os.environ.get("VACUUM_START_SCRIPT")
     if override:
         return Path(override)
     if _START_SCRIPT.exists():
         return _START_SCRIPT
-    return Path.home() / ".openclaw" / "workspace" / "skills" / "vacuum-ground-clean" / "scripts" / "start-clean.sh"
+    raise FileNotFoundError(f"Vacuum start script not found: {_START_SCRIPT}")
 
 
 def _find_navigate_script() -> Path:
@@ -117,13 +135,13 @@ def _find_navigate_script() -> Path:
         return Path(override)
     if _NAVIGATE_SCRIPT.exists():
         return _NAVIGATE_SCRIPT
-    return Path.home() / ".openclaw" / "workspace" / "skills" / "navigate_to.sh"
+    raise FileNotFoundError(f"Navigation script not found: {_NAVIGATE_SCRIPT}")
 
 
 def _parse_recognition(recognition: str) -> dict:
     """Parse the vision model response into a decision dict.
 
-    Expected format: a short Chinese conclusion followed by an ACTION line:
+    Expected format: a short English conclusion followed by an ACTION line:
         ACTION: START_VACUUM
         ACTION: DO_NOT_START
     """
@@ -147,17 +165,17 @@ def _parse_recognition(recognition: str) -> dict:
     reason = " ".join(reason_lines).strip()
 
     # Heuristic: did the model see garbage?
-    # Be careful not to mistake phrases like "无明显湿痕" for "no garbage".
+    # Be careful not to mistake phrases like "no obvious wet marks" for "no garbage".
     no_garbage_phrases = [
-        "没有明显垃圾",
-        "没有垃圾",
-        "无明显垃圾",
-        "无垃圾",
-        "没有可见垃圾",
-        "无可见垃圾",
-        "地上没有",
-        "未发现垃圾",
-        "未发现明显垃圾",
+        "no obvious garbage",
+        "no garbage",
+        "no visible garbage",
+        "no garbage visible",
+        "floor is clean",
+        "no debris",
+        "no trash",
+        "nothing on the floor",
+        "no significant garbage",
     ]
     explicitly_no_garbage = any(phrase in reason for phrase in no_garbage_phrases)
 
@@ -173,7 +191,7 @@ def _parse_recognition(recognition: str) -> dict:
 
     # If no explicit ACTION was found, fall back to keyword matching.
     if action == "manual_cleanup" and "ACTION:" not in text.upper():
-        if "适合" in reason and "不适合" not in reason:
+        if "suitable" in reason and "not suitable" not in reason:
             action = "start_vacuum"
             has_garbage = True
 
@@ -300,7 +318,7 @@ def capture_from_ros2(
         output_dir = str(_SKILL_ROOT / "scripts" / "photos")
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"📷 等待 ROS2 图像话题: {topic_name}")
+    print(f"📷 Waiting for ROS2 image topic: {topic_name}")
     rclpy.init()
     try:
         node = _ImageSubscriber(topic_name)
@@ -309,7 +327,7 @@ def capture_from_ros2(
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(output_dir, f"ros2_{ts}.jpg")
         cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        print(f"✅ 已保存照片: {path}")
+        print(f"✅ Photo saved: {path}")
         return path
     finally:
         node.destroy_node()
@@ -341,14 +359,14 @@ def navigate_to_target() -> None:
     if not navigate_script.exists():
         raise FileNotFoundError(f"Navigation script not found: {navigate_script}")
 
-    print("🧭 正在导航到清扫位置...")
+    print("🧭 Navigating to cleaning pose...")
     result = subprocess.run(
         ["bash", str(navigate_script), "1.0", "2.0", "0.0", "0", "0", "0.707", "0.707"],
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"导航到清扫位置失败 (退出码: {result.returncode})")
-    print("✅ 已到达清扫位置。")
+        raise RuntimeError(f"Navigation to cleaning pose failed (exit code: {result.returncode})")
+    print("✅ Arrived at cleaning pose.")
 
 
 def main() -> int:
@@ -356,7 +374,7 @@ def main() -> int:
         navigate_to_target()
         decision = capture_and_decide()
     except Exception as exc:
-        print(f"导航、拍照或识别失败：{exc}", file=sys.stderr)
+        print(f"Navigation, capture, or recognition failed: {exc}", file=sys.stderr)
         return 1
 
     reason = decision.get("reason", "")
@@ -364,23 +382,23 @@ def main() -> int:
     raw_recognition = decision.get("raw_recognition", "")
 
     # Always print the raw model response first so the prompt can be tuned.
-    print("===== Qwen 原始输出 =====")
+    print("===== Qwen raw output =====")
     print(raw_recognition)
-    print("=========================")
-    print(f"[解析结果] 识别结论：{reason}")
+    print("===========================")
+    print(f"[Parsed] Recognition conclusion: {reason}")
 
-    print("【Demo 模式】无论识别结果如何，都启动扫地机。")
-    print(f"识别结果：{reason}")
-    print("正在启动扫地机...")
+    print("[Demo mode] Starting vacuum regardless of recognition result.")
+    print(f"Recognition result: {reason}")
+    print("Starting vacuum...")
     try:
         start_vacuum()
-        print("扫地机已启动。")
+        print("Vacuum started.")
     except subprocess.CalledProcessError as exc:
-        print(f"扫地机启动失败：{exc}", file=sys.stderr)
+        print(f"Failed to start vacuum: {exc}", file=sys.stderr)
         return 1
 
     if image_path:
-        print(f"照片已保存：{image_path}")
+        print(f"Photo saved: {image_path}")
 
     return 0
 
