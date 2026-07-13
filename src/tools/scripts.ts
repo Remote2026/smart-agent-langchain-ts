@@ -1,7 +1,8 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { z } from "zod";
 import { createLogger } from "../utils/logger.js";
 
@@ -10,17 +11,21 @@ const log = createLogger("tools/scripts.ts");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = path.resolve(__dirname, "..", "..", "scripts");
 
-function runScript(name: string, timeoutMs = 30000): string {
+const execFileAsync = promisify(execFile);
+
+async function runScript(name: string, timeoutMs = 30000): Promise<string> {
   const scriptPath = path.join(SCRIPTS_DIR, name);
   log.info("runScript", `Executing ${scriptPath}`);
 
   try {
-    const output = execSync(`bash "${scriptPath}"`, {
+    const { stdout, stderr } = await execFileAsync("bash", [scriptPath], {
       encoding: "utf-8",
       timeout: timeoutMs,
-      stdio: ["pipe", "pipe", "pipe"]
     });
-    return output.trim();
+    if (stderr) {
+      log.warn("runScript", `${name} stderr:`, stderr);
+    }
+    return stdout.trim();
   } catch (error: any) {
     const stderr = error.stderr?.toString() || "";
     const stdout = error.stdout?.toString() || "";
@@ -30,17 +35,19 @@ function runScript(name: string, timeoutMs = 30000): string {
   }
 }
 
-function runPythonScript(name: string, timeoutMs = 120000): string {
+async function runPythonScript(name: string, timeoutMs = 120000): Promise<string> {
   const scriptPath = path.join(SCRIPTS_DIR, name);
   log.info("runPythonScript", `Executing ${scriptPath}`);
 
   try {
-    const output = execSync(`python3 "${scriptPath}"`, {
+    const { stdout, stderr } = await execFileAsync("python3", [scriptPath], {
       encoding: "utf-8",
       timeout: timeoutMs,
-      stdio: ["pipe", "pipe", "pipe"]
     });
-    return output.trim();
+    if (stderr) {
+      log.warn("runPythonScript", `${name} stderr:`, stderr);
+    }
+    return stdout.trim();
   } catch (error: any) {
     const stderr = error.stderr?.toString() || "";
     const stdout = error.stdout?.toString() || "";
