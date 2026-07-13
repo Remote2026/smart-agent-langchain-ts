@@ -22,10 +22,16 @@ const appConfig = loadAppConfig();
  * 数据流（简化）：
  * HTTP /api/chat -> SmartAgent -> (LangGraph StateGraph) -> tools(smartthings_* / ros2_*) -> SSE -> Web UI
  */
-const foxgloveClient = new FoxgloveClient(appConfig.env.FOXGLOVE_URL);
-foxgloveClient.connect().catch((err) => {
-  log.error("start", "Foxglove connection failed:", err);
-});
+const foxgloveClient = appConfig.env.FOXGLOVE_URL
+  ? new FoxgloveClient(appConfig.env.FOXGLOVE_URL)
+  : undefined;
+if (foxgloveClient) {
+  foxgloveClient.connect().catch((err) => {
+    log.error("start", "Foxglove connection failed:", err);
+  });
+} else {
+  log.info("start", "FOXGLOVE_URL not set, skipping Foxglove connection");
+}
 
 const tools = createTools({
   smartThings: new SmartThingsClient(),
@@ -261,7 +267,7 @@ app.listen(appConfig.env.PORT, () => {
 // 优雅关闭：断开 Slack WebSocket 和 Foxglove，避免孤立连接导致反复重连
 function gracefulShutdown(signal: string) {
   log.info("shutdown", `received ${signal}, stopping...`);
-  foxgloveClient.disconnect();
+  foxgloveClient?.disconnect();
   stopSlack()
     .then(() => log.info("shutdown", "Slack app stopped"))
     .catch((err) => log.error("shutdown", "Slack stop failed:", err))

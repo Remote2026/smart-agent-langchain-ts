@@ -30,6 +30,13 @@ describe("createRobotTools", () => {
     vi.useRealTimers();
   });
 
+  describe("without foxglove client", () => {
+    it("returns an empty tool list", () => {
+      const tools = createRobotTools(undefined);
+      expect(tools).toHaveLength(0);
+    });
+  });
+
   describe("robot_status", () => {
     it("returns connected status", async () => {
       const tool = makeTools(mockFoxglove).find((t) => t.name === "robot_status")!;

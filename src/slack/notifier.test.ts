@@ -59,7 +59,7 @@ describe("createSlackNotifier", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalledWith({
       channel: channelId,
-      text: "处理失败：API timeout",
+      text: "Failed: API timeout",
       thread_ts: "thread.2"
     });
   });

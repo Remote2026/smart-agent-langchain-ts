@@ -15,7 +15,12 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().min(1).default("qwen-vl-plus"), // 支持视觉的多模态模型
   ROSBRIDGE_URL: z.string().url().default("ws://localhost:9090"),
-  FOXGLOVE_URL: z.string().url().default("ws://172.18.0.1:8765"),
+  // Foxglove：未设置或设为空字符串时不启用机器人可视化/控制工具
+  FOXGLOVE_URL: z
+    .string()
+    .optional()
+    .transform((val) => (typeof val === "string" && val.trim() === "" ? undefined : val))
+    .pipe(z.string().url().optional()),
   PORT: z.coerce.number().int().positive().default(3000),
   // SmartThings OAuth tokens (ACCESS_TOKEN replaces PAT)
   SMARTTHINGS_CLIENT_ID: z.string().optional(),

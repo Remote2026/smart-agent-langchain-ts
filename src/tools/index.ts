@@ -17,7 +17,7 @@ function formatDeviceList(devices: SmartThingsDevice[]): string {
 
 export function createTools(options: {
   smartThings: SmartThingsClient;
-  foxglove: FoxgloveClient;
+  foxglove?: FoxgloveClient;
 }) {
   const { smartThings, foxglove } = options;
   const getDeviceStatusInput = z.object({

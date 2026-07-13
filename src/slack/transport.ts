@@ -189,7 +189,7 @@ export function createSlackTransport(options: {
       state.buffer = "";
       const parts: string[] = [];
       if (state.displayedText) parts.push(state.displayedText);
-      parts.push("处理失败：" + message);
+      parts.push("Failed: " + message);
       const errorText = parts.join("\n\n");
       try {
         await slackClient.chat.update({
@@ -206,7 +206,7 @@ export function createSlackTransport(options: {
 
     await slackClient.chat.postMessage({
       channel,
-      text: `处理失败：${message}`,
+      text: `Failed: ${message}`,
       ...(threadTs ? { thread_ts: threadTs } : {}),
     }).catch(err => log.error("postMessage", "failed:", err));
   }
@@ -312,7 +312,7 @@ export function createSlackTransport(options: {
     try {
       const result = await slackClient.chat.postMessage({
         channel: slackChannel,
-        text: "⏳ 正在思考中...",
+        text: "⏳ Thinking...",
         ...(threadTs ? { thread_ts: threadTs } : {}),
       });
       initTs = result.ts ?? undefined;
@@ -334,9 +334,9 @@ export function createSlackTransport(options: {
 
     function toolStatusText(payload: { name: string; status: string }): string {
       const { name, status } = payload;
-      if (status === "executing") return `🔧 正在调用工具: ${name}...`;
-      if (status === "ok") return `✅ 工具 ${name} 已完成`;
-      return `❌ 工具 ${name} 失败`;
+      if (status === "executing") return `🔧 Calling tool: ${name}...`;
+      if (status === "ok") return `✅ Tool ${name} completed`;
+      return `❌ Tool ${name} failed`;
     }
 
     const emit = (event: ChatEventOut) => {

@@ -5,13 +5,18 @@ import type { FoxgloveClient } from "../foxglove/client.js";
 const CMD_VEL_TOPIC = "/turtle1/cmd_vel";
 const PUB_HZ = 10;
 
-export function createRobotTools(foxglove: FoxgloveClient) {
+export function createRobotTools(foxglove?: FoxgloveClient) {
+  if (!foxglove) {
+    return [];
+  }
+  const client = foxglove;
+
   let cmdVelChannelPromise: Promise<number> | undefined;
   let stopTimer: NodeJS.Timeout | null = null;
 
   async function getChannel(): Promise<number> {
     if (!cmdVelChannelPromise) {
-      cmdVelChannelPromise = foxglove.advertiseTopic(CMD_VEL_TOPIC);
+      cmdVelChannelPromise = client.advertiseTopic(CMD_VEL_TOPIC);
     }
     return cmdVelChannelPromise;
   }
@@ -19,10 +24,10 @@ export function createRobotTools(foxglove: FoxgloveClient) {
   function scheduleStop(delayMs: number) {
     if (stopTimer) clearTimeout(stopTimer);
     stopTimer = setTimeout(() => {
-      foxglove.stopPublishing();
-      foxglove.setTwist(0, 0, 0, 0, 0, 0);
+      client.stopPublishing();
+      client.setTwist(0, 0, 0, 0, 0, 0);
       getChannel().then((cid) =>
-        foxglove.publishJson(cid, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } })
+        client.publishJson(cid, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } })
       );
     }, delayMs);
   }
@@ -37,16 +42,16 @@ export function createRobotTools(foxglove: FoxgloveClient) {
   async function startMotion(lx: number, ly: number, lz: number, ax: number, ay: number, az: number) {
     cancelStop();
     const cid = await getChannel();
-    foxglove.setTwist(lx, ly, lz, ax, ay, az);
-    foxglove.startPublishing(cid, { linear: { x: lx, y: ly, z: lz }, angular: { x: ax, y: ay, z: az } }, PUB_HZ);
+    client.setTwist(lx, ly, lz, ax, ay, az);
+    client.startPublishing(cid, { linear: { x: lx, y: ly, z: lz }, angular: { x: ax, y: ay, z: az } }, PUB_HZ);
   }
 
   async function doStop() {
     cancelStop();
-    foxglove.stopPublishing();
-    foxglove.setTwist(0, 0, 0, 0, 0, 0);
+    client.stopPublishing();
+    client.setTwist(0, 0, 0, 0, 0, 0);
     const cid = await getChannel();
-    foxglove.publishJson(cid, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
+    client.publishJson(cid, { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
   }
 
   return [
@@ -55,7 +60,7 @@ export function createRobotTools(foxglove: FoxgloveClient) {
       description: "Check if the robot controller is connected and ready.",
       schema: z.object({}),
       func: async () => {
-        return `Robot connected: ${foxglove.connected}`;
+        return `Robot connected: ${client.connected}`;
       },
     }),
 

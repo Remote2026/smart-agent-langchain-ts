@@ -180,7 +180,7 @@ export function createSlackNotifier(
     try {
       await client.chat.postMessage({
         channel: defaultChannelId,
-        text: `处理失败：${message}`,
+        text: `Failed: ${message}`,
         thread_ts: threadTs
       });
     } catch (err) {
@@ -208,7 +208,7 @@ export function createSlackNotifier(
         try {
           const result = await client.chat.postMessage({
             channel: defaultChannelId,
-            text: "⏳ 正在思考中...",
+            text: "⏳ Thinking...",
             thread_ts: threadTs,
           });
           state!.ts = result.ts || null;
@@ -297,7 +297,7 @@ export function createSlackNotifier(
         state.buffer = "";
         const parts: string[] = [];
         if (state.displayedText) parts.push(state.displayedText);
-        parts.push("处理失败：" + message);
+        parts.push("Failed: " + message);
         const errorText = parts.join("\n\n");
         if (state.ts) {
           try {
@@ -322,8 +322,8 @@ export function createSlackNotifier(
     if (!threadTs) return;
     const icon = payload.status === "executing" ? "🔧" : payload.status === "ok" ? "✅" : "❌";
     const msg = payload.status === "executing"
-      ? `${icon} 正在调用工具: ${payload.name}...`
-      : `${icon} 工具 ${payload.name} ${payload.status === "ok" ? "已完成" : "失败"}`;
+      ? `${icon} Calling tool: ${payload.name}...`
+      : `${icon} Tool ${payload.name} ${payload.status === "ok" ? "completed" : "failed"}`;
 
     const state = activeStreams.get(threadTs);
     if (state && state.ts) {
