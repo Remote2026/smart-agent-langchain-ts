@@ -334,6 +334,24 @@ def start_water() -> None:
     subprocess.run(["bash", str(start_script)], check=True)
 
 
+def send_slack_dm(image_path: str, message: str) -> None:
+    """Send the captured image and Qwen response to Slack DM."""
+    slack_script = _SCRIPTS_DIR / "send_image_to_slack_dm.sh"
+    if not slack_script.exists():
+        print(f"⚠️ Slack DM script not found: {slack_script}")
+        return
+
+    print("📤 Sending photo and Qwen response to Slack DM...")
+    result = subprocess.run(
+        ["bash", str(slack_script), image_path, message],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("⚠️ Failed to send Slack DM", file=sys.stderr)
+    else:
+        print("✅ Slack DM sent.")
+
+
 def navigate_to_target() -> None:
     """Navigate to the fixed plant-viewing pose before capturing the photo."""
     navigate_script = _find_navigate_script()
@@ -378,6 +396,9 @@ def main() -> int:
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         print(f"Failed to start water device: {exc}", file=sys.stderr)
         return 1
+
+    if image_path and raw_recognition:
+        send_slack_dm(image_path, raw_recognition)
 
     if image_path:
         print(f"Photo saved: {image_path}")

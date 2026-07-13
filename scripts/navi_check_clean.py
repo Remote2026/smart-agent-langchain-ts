@@ -345,12 +345,30 @@ def capture_and_decide() -> dict:
 
 
 def start_vacuum() -> None:
-    """Call the start-clean.sh script to dispatch the robot vacuum."""
+    """Call the start_clean.sh script to dispatch the robot vacuum."""
     start_script = _find_start_script()
     if not start_script.exists():
         raise FileNotFoundError(f"Vacuum start script not found: {start_script}")
 
     subprocess.run(["bash", str(start_script)], check=True)
+
+
+def send_slack_dm(image_path: str, message: str) -> None:
+    """Send the captured image and Qwen response to Slack DM."""
+    slack_script = _SCRIPTS_DIR / "send_image_to_slack_dm.sh"
+    if not slack_script.exists():
+        print(f"⚠️ Slack DM script not found: {slack_script}")
+        return
+
+    print("📤 Sending photo and Qwen response to Slack DM...")
+    result = subprocess.run(
+        ["bash", str(slack_script), image_path, message],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("⚠️ Failed to send Slack DM", file=sys.stderr)
+    else:
+        print("✅ Slack DM sent.")
 
 
 def navigate_to_target() -> None:
@@ -396,6 +414,9 @@ def main() -> int:
     except subprocess.CalledProcessError as exc:
         print(f"Failed to start vacuum: {exc}", file=sys.stderr)
         return 1
+
+    if image_path and raw_recognition:
+        send_slack_dm(image_path, raw_recognition)
 
     if image_path:
         print(f"Photo saved: {image_path}")
