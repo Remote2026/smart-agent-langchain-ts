@@ -391,6 +391,22 @@ def navigate_to_target() -> None:
     print("✅ Arrived at cleaning pose.")
 
 
+def navigate_home() -> None:
+    """Return the robot to the origin (0, 0) after cleaning."""
+    navigate_script = _find_navigate_script()
+    if not navigate_script.exists():
+        raise FileNotFoundError(f"Navigation script not found: {navigate_script}")
+
+    print("🧭 Returning to home position (0, 0)...")
+    result = subprocess.run(
+        ["bash", str(navigate_script), "0", "0"],
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Return to home failed (exit code: {result.returncode})")
+    print("✅ Arrived at home position.")
+
+
 def main() -> int:
     try:
         navigate_to_target()
@@ -445,6 +461,11 @@ def main() -> int:
 
     if image_path:
         print(f"Photo saved: {image_path}")
+
+    try:
+        navigate_home()
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"⚠️ Failed to return home: {exc}", file=sys.stderr)
 
     return 0
 
