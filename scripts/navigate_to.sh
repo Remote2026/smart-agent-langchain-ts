@@ -32,6 +32,7 @@ NO_WAIT="false"
 RESEND_ON_NO_CMD_VEL="${NAV_RESEND_ON_NO_CMD_VEL:-true}"
 CMD_VEL_START_TIMEOUT="${NAV_CMD_VEL_START_TIMEOUT:-18}"
 MAX_SEND_ATTEMPTS="${NAV_MAX_SEND_ATTEMPTS:-2}"
+MAX_FAILURE_RETRIES="${NAV_MAX_FAILURE_RETRIES:-2}"
 
 is_true() {
     case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
@@ -208,6 +209,122 @@ wait_for_first_cmd_vel_nav() {
     " >/dev/null 2>&1
 }
 
+run_navigate_attempt() {
+    local attempt=1
+    local exit_code=1
+    local timeout_reason=""
+
+    while [ "$attempt" -le "$MAX_SEND_ATTEMPTS" ]; do
+        if [ "$attempt" -gt 1 ]; then
+            echo "" >>"$RESULT_FILE"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >>"$RESULT_FILE"
+            echo "🔁 第 ${attempt}/${MAX_SEND_ATTEMPTS} 次重新发送导航目标" >>"$RESULT_FILE"
+        fi
+
+        set +e
+        start_action_send "$RESULT_FILE"
+
+        if is_true "$RESEND_ON_NO_CMD_VEL"; then
+            wait_for_first_cmd_vel_nav &
+            CMD_MONITOR_PID=$!
+
+            while kill -0 "$ACTION_PID" 2>/dev/null && kill -0 "$CMD_MONITOR_PID" 2>/dev/null; do
+                sleep 0.2
+            done
+
+            if ! kill -0 "$ACTION_PID" 2>/dev/null; then
+                kill "$CMD_MONITOR_PID" 2>/dev/null || true
+                wait "$CMD_MONITOR_PID" 2>/dev/null || true
+                wait "$ACTION_PID"
+                exit_code=$?
+                set -e
+                break
+            fi
+
+            wait "$CMD_MONITOR_PID"
+            CMD_MONITOR_CODE=$?
+            if [ "$CMD_MONITOR_CODE" -ne 0 ]; then
+                kill "$ACTION_PID" 2>/dev/null || true
+                cleanup_stale_action_clients
+                wait "$ACTION_PID" 2>/dev/null || true
+                echo "" >>"$RESULT_FILE"
+                echo "⏱️  ${CMD_VEL_START_TIMEOUT}s 内没有收到 ${CMD_VEL_NAV_TOPIC}，已停止本次 action client" >>"$RESULT_FILE"
+                if [ "$attempt" -ge "$MAX_SEND_ATTEMPTS" ]; then
+                    exit_code=124
+                    timeout_reason="cmd_vel_nav"
+                    set -e
+                    break
+                fi
+                attempt=$((attempt + 1))
+                set -e
+                continue
+            fi
+        fi
+
+        wait_for_pid_with_timeout "$ACTION_PID" "$TIMEOUT"
+        exit_code=$?
+        if [ "$exit_code" -eq 124 ]; then
+            timeout_reason="action_result"
+        fi
+        set -e
+        break
+    done
+
+    if [ "$exit_code" -eq 124 ]; then
+        cleanup_stale_action_clients
+        cat "$RESULT_FILE"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        if [ "$timeout_reason" = "cmd_vel_nav" ]; then
+            echo "⏱️  连续 ${MAX_SEND_ATTEMPTS} 次发送后，${CMD_VEL_START_TIMEOUT}s 内仍没有收到 ${CMD_VEL_NAV_TOPIC}"
+            echo "   已清理残留 action client，未继续等待导航结果。"
+        else
+            echo "⏱️  等待导航结果超时 (${TIMEOUT}s)，已清理残留 action client"
+            echo "   注意: 目标可能已经被 Nav2 接收，但脚本已停止等待结果。"
+        fi
+        speak_failed
+        exit 5
+    fi
+
+    cat "$RESULT_FILE" >&2
+
+    local result_text
+    local status=""
+    local text_status=""
+
+    result_text=$(cat "$RESULT_FILE")
+
+    status=$(echo "$result_text" | grep -oP 'status:\s*\K\d+' | tail -1 || echo "")
+    text_status=$(echo "$result_text" | grep -oP 'status:\s*\K[A-Z_]+' | tail -1 || echo "")
+
+    if [ -z "$status" ]; then
+        if echo "$result_text" | grep -qi "Goal was rejected"; then
+            status="REJECTED"
+        elif echo "$result_text" | grep -qi "Goal finished with status: SUCCEEDED"; then
+            status="4"
+        elif echo "$result_text" | grep -qi "Goal finished with status: CANCELED"; then
+            status="5"
+        elif echo "$result_text" | grep -qi "Goal finished with status: ABORTED"; then
+            status="6"
+        fi
+    fi
+
+    if [ -z "$status" ] && [ -n "$text_status" ]; then
+        case "$text_status" in
+            UNKNOWN) status="0" ;;
+            ACCEPTED) status="1" ;;
+            EXECUTING) status="2" ;;
+            CANCELING) status="3" ;;
+            SUCCEEDED) status="4" ;;
+            CANCELED) status="5" ;;
+            ABORTED) status="6" ;;
+            REJECTED) status="REJECTED" ;;
+        esac
+    fi
+
+    echo "$status"
+}
+
 if [ "$NO_WAIT" = "true" ]; then
     # 不等待: 发送目标后立即返回
     echo "📤 发送目标 (不等待结果)..."
@@ -246,123 +363,23 @@ echo "📤 发送导航目标，等待完成..."
 RESULT_FILE=$(mktemp)
 trap "rm -f $RESULT_FILE" EXIT
 
-EXIT_CODE=1
-ATTEMPT=1
-TIMEOUT_REASON=""
-while [ "$ATTEMPT" -le "$MAX_SEND_ATTEMPTS" ]; do
-    if [ "$ATTEMPT" -gt 1 ]; then
-        echo "" >>"$RESULT_FILE"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >>"$RESULT_FILE"
-        echo "🔁 第 ${ATTEMPT}/${MAX_SEND_ATTEMPTS} 次重新发送导航目标" >>"$RESULT_FILE"
+FAILURE_RETRY_COUNT=0
+while [ "$FAILURE_RETRY_COUNT" -le "$MAX_FAILURE_RETRIES" ]; do
+    if [ "$FAILURE_RETRY_COUNT" -gt 0 ]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🔁 导航被中止 (ABORTED)，第 ${FAILURE_RETRY_COUNT}/${MAX_FAILURE_RETRIES} 次重试..."
+        cleanup_stale_action_clients
     fi
 
-    set +e
-    start_action_send "$RESULT_FILE"
+    STATUS=$(run_navigate_attempt)
 
-    if is_true "$RESEND_ON_NO_CMD_VEL"; then
-        wait_for_first_cmd_vel_nav &
-        CMD_MONITOR_PID=$!
-
-        while kill -0 "$ACTION_PID" 2>/dev/null && kill -0 "$CMD_MONITOR_PID" 2>/dev/null; do
-            sleep 0.2
-        done
-
-        if ! kill -0 "$ACTION_PID" 2>/dev/null; then
-            kill "$CMD_MONITOR_PID" 2>/dev/null || true
-            wait "$CMD_MONITOR_PID" 2>/dev/null || true
-            wait "$ACTION_PID"
-            EXIT_CODE=$?
-            set -e
-            break
-        fi
-
-        wait "$CMD_MONITOR_PID"
-        CMD_MONITOR_CODE=$?
-        if [ "$CMD_MONITOR_CODE" -ne 0 ]; then
-            kill "$ACTION_PID" 2>/dev/null || true
-            cleanup_stale_action_clients
-            wait "$ACTION_PID" 2>/dev/null || true
-            echo "" >>"$RESULT_FILE"
-            echo "⏱️  ${CMD_VEL_START_TIMEOUT}s 内没有收到 ${CMD_VEL_NAV_TOPIC}，已停止本次 action client" >>"$RESULT_FILE"
-            if [ "$ATTEMPT" -ge "$MAX_SEND_ATTEMPTS" ]; then
-                EXIT_CODE=124
-                TIMEOUT_REASON="cmd_vel_nav"
-                set -e
-                break
-            fi
-            ATTEMPT=$((ATTEMPT + 1))
-            set -e
-            continue
-        fi
+    if [ "$STATUS" != "6" ]; then
+        break
     fi
 
-    wait_for_pid_with_timeout "$ACTION_PID" "$TIMEOUT"
-    EXIT_CODE=$?
-    if [ "$EXIT_CODE" -eq 124 ]; then
-        TIMEOUT_REASON="action_result"
-    fi
-    set -e
-    break
+    FAILURE_RETRY_COUNT=$((FAILURE_RETRY_COUNT + 1))
 done
-
-if [ "$EXIT_CODE" -eq 124 ]; then
-    cleanup_stale_action_clients
-fi
-
-# ---- 显示输出 ----
-cat "$RESULT_FILE"
-
-if [ "$EXIT_CODE" -eq 124 ]; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    if [ "$TIMEOUT_REASON" = "cmd_vel_nav" ]; then
-        echo "⏱️  连续 ${MAX_SEND_ATTEMPTS} 次发送后，${CMD_VEL_START_TIMEOUT}s 内仍没有收到 ${CMD_VEL_NAV_TOPIC}"
-        echo "   已清理残留 action client，未继续等待导航结果。"
-    else
-        echo "⏱️  等待导航结果超时 (${TIMEOUT}s)，已清理残留 action client"
-        echo "   注意: 目标可能已经被 Nav2 接收，但脚本已停止等待结果。"
-    fi
-    speak_failed
-    exit 5
-fi
-
-# ---- 解析结果 ----
-RESULT_TEXT=$(cat "$RESULT_FILE")
-
-# ROS2 action status codes
-# 0=UNKNOWN, 1=ACCEPTED, 2=EXECUTING, 3=CANCELING, 4=SUCCEEDED, 5=CANCELED, 6=ABORTED
-STATUS=$(echo "$RESULT_TEXT" | grep -oP 'status:\s*\K\d+' | tail -1 || echo "")
-TEXT_STATUS=$(echo "$RESULT_TEXT" | grep -oP 'status:\s*\K[A-Z_]+' | tail -1 || echo "")
-
-# Humble ros2cli commonly prints textual terminal states, for example:
-#   Goal finished with status: SUCCEEDED
-#   Goal finished with status: ABORTED
-# Keep this parser before the fallback "goal accepted" check; otherwise an
-# aborted goal is incorrectly reported as still executing.
-if [ -z "$STATUS" ]; then
-    if echo "$RESULT_TEXT" | grep -qi "Goal was rejected"; then
-        STATUS="REJECTED"
-    elif echo "$RESULT_TEXT" | grep -qi "Goal finished with status: SUCCEEDED"; then
-        STATUS="4"
-    elif echo "$RESULT_TEXT" | grep -qi "Goal finished with status: CANCELED"; then
-        STATUS="5"
-    elif echo "$RESULT_TEXT" | grep -qi "Goal finished with status: ABORTED"; then
-        STATUS="6"
-    fi
-fi
-
-if [ -z "$STATUS" ] && [ -n "$TEXT_STATUS" ]; then
-    case "$TEXT_STATUS" in
-        UNKNOWN) STATUS="0" ;;
-        ACCEPTED) STATUS="1" ;;
-        EXECUTING) STATUS="2" ;;
-        CANCELING) STATUS="3" ;;
-        SUCCEEDED) STATUS="4" ;;
-        CANCELED) STATUS="5" ;;
-        ABORTED) STATUS="6" ;;
-        REJECTED) STATUS="REJECTED" ;;
-    esac
-fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -379,7 +396,7 @@ case "$STATUS" in
         exit 3
         ;;
     6)
-        echo "❌ 导航失败 (被中止)"
+        echo "❌ 导航失败 (被中止)，已重试 ${MAX_FAILURE_RETRIES} 次"
         speak_failed
         exit 4
         ;;
@@ -389,21 +406,17 @@ case "$STATUS" in
         exit 8
         ;;
     "")
-        if echo "$RESULT_TEXT" | grep -qi "timeout\|timed out"; then
-            echo "⏱️  导航超时"
-            speak_failed
-            exit 5
-        elif echo "$RESULT_TEXT" | grep -qi "goal accepted\|goal.*queued"; then
-            # 目标已被接受但未等到完成 (no-wait 或仍在执行中)
+        if grep -qi "goal accepted\|goal.*queued" "$RESULT_FILE"; then
+            # 目标已被接受但未等到完成
             echo "📨 目标已接受 (仍在执行中)"
             exit 0
         else
-            echo "⚠️  无法解析导航结果 (退出码: $EXIT_CODE)"
+            echo "⚠️  无法解析导航结果"
             exit 6
         fi
         ;;
     *)
-        echo "⚠️  未知状态码: $STATUS (退出码: $EXIT_CODE)"
+        echo "⚠️  未知状态码: $STATUS"
         exit 7
         ;;
 esac
