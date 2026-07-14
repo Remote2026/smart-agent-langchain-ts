@@ -1,8 +1,7 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptions } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { z } from "zod";
 import { createLogger } from "../utils/logger.js";
 
@@ -11,7 +10,22 @@ const log = createLogger("tools/scripts.ts");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = path.resolve(__dirname, "..", "..", "scripts");
 
-const execFileAsync = promisify(execFile);
+function execFileAsync(
+  file: string,
+  args: readonly string[],
+  options: ExecFileOptions
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        Object.assign(error, { stdout, stderr });
+        reject(error);
+      } else {
+        resolve({ stdout: stdout as string, stderr: stderr as string });
+      }
+    });
+  });
+}
 
 async function runScript(name: string, timeoutMs = 30000): Promise<string> {
   const scriptPath = path.join(SCRIPTS_DIR, name);
@@ -35,7 +49,7 @@ async function runScript(name: string, timeoutMs = 30000): Promise<string> {
   }
 }
 
-async function runPythonScript(name: string, timeoutMs = 120000): Promise<string> {
+async function runPythonScript(name: string, timeoutMs = 60000): Promise<string> {
   const scriptPath = path.join(SCRIPTS_DIR, name);
   log.info("runPythonScript", `Executing ${scriptPath}`);
 

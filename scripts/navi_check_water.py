@@ -364,7 +364,7 @@ def navigate_to_target() -> None:
 
     print("🧭 Navigating to plant position...")
     result = subprocess.run(
-        ["bash", str(navigate_script), "0", "0.5", "0.0", "0", "0", "0.819", "0.5735"],
+        ["bash", str(navigate_script), "1.8", "-0.6", "0.0", "0", "0", "-0.642", "0.766"],
         check=False,
     )
     if result.returncode != 0:
