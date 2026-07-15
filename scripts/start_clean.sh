@@ -5,7 +5,7 @@ set -euo pipefail
 # Uses SmartThings API to start cleaning immediately
 
 # ---- Configuration ----
-DEVICE_ID="65eebb6a-ab5c-4eb7-9f1a-a811da5f9f8f"
+DEVICE_ID="65f750d9-b6b9-44b9-886b-4a67598cc352"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="${PROJECT_ROOT}/.env"
 API_URL="https://api.stacceptance.com/v1/devices/${DEVICE_ID}/commands"
@@ -43,10 +43,10 @@ JSON_PAYLOAD=$(cat <<EOF
                     "spots": [
                         {
                             "id": "0",
-                            "topLeftX": 30,
-                            "topLeftY": 90,
-                            "bottomRightX": 50,
-                            "bottomRightY": 110
+                            "topLeftX": 60,
+                            "topLeftY": -5,
+                            "bottomRightX": 80,
+                            "bottomRightY": 10
                         }
                     ]
                 }
