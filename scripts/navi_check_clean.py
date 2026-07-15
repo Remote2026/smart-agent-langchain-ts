@@ -383,7 +383,7 @@ def navigate_to_target() -> None:
 
     print("🧭 Navigating to cleaning pose...")
     result = subprocess.run(
-        ["bash", str(navigate_script), "3.0", "-0.6", "0.0", "0", "0", "0.5", "0.866"],
+        ["bash", str(navigate_script), "3.0", "-0.6", "0.0", "0", "0", "0.383", "0.924"],
         check=False,
     )
     if result.returncode != 0:
