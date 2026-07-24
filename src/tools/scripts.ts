@@ -49,7 +49,7 @@ async function runScript(name: string, timeoutMs = 30000): Promise<string> {
   }
 }
 
-async function runPythonScript(name: string, timeoutMs = 60000): Promise<string> {
+async function runPythonScript(name: string, timeoutMs = 90000): Promise<string> {
   const scriptPath = path.join(SCRIPTS_DIR, name);
   log.info("runPythonScript", `Executing ${scriptPath}`);
 
